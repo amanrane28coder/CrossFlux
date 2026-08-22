@@ -46,17 +46,20 @@ The repository features an interactive web visualization suite built on `Streaml
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/YourUsername/CrossFlux.git
+git clone https://github.com/amanrane28coder/CrossFlux.git
 cd CrossFlux
 
-# 2. Configure the true-black theme
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure the true-black theme
 mkdir -p .streamlit
 echo -e "[theme]\nbase = \"dark\"\nfont = \"monospace\"" > .streamlit/config.toml
 
-# 3. Launch the synthetic demo feed (or start the C++ backend)
-python dashboard/seed_demo_feed.py &
+# 4. Launch the synthetic demo feed (or start the C++ backend)
+python3 dashboard/seed_demo_feed.py &
 
-# 4. Spin up the terminal UI
+# 5. Spin up the terminal UI
 streamlit run dashboard/app.py
 ```
 
