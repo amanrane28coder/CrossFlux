@@ -1,6 +1,6 @@
 <div align="center">
   <h1>⚡ CrossFlux</h1>
-  <p><strong>Nanosecond-Optimized HFT Architecture for Structural OBI Dislocations</strong></p>
+  <p><strong>Nanosecond-Optimized HFT Architecture for Cross-Venue Latency Arbitrage</strong></p>
 
   <!-- Badges -->
   <p>
