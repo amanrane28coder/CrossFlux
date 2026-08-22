@@ -1,0 +1,29 @@
+# CrossFlux — Python dependencies
+#
+# Grouped by what needs them, because the groups have genuinely different
+# requirements: the backtest runs offline from CSVs in data/, while the live
+# dashboard and ingestion paths need network clients that a reviewer reproducing
+# the backtest never has to install.
+
+# --- Core: backtest, analysis, tests -----------------------------------------
+pandas>=2.1.0
+numpy>=1.26.0
+scipy>=1.11.0            # lognorm CDF in the execution probability model
+pytest>=8.0.0
+matplotlib>=3.8.0        # scripts/run_backtest.py writes backtest_results.png
+
+# --- Dashboard (dashboard/app.py, run_live_dashboard.sh) ---------------------
+streamlit>=1.32.0
+streamlit-autorefresh>=1.0.1
+plotly>=5.20.0
+
+# --- Live ingestion (src/live_ingestion.py) ---------------------------------
+websockets>=12.0         # Binance/Kraken market-data streams
+certifi>=2024.2.2        # TLS roots; macOS python often has none by default
+yfinance>=0.2.37         # equities snapshot feed
+
+# --- Historical data download (scripts/download_*.py) -----------------------
+# Only needed to re-fetch raw captures from Tardis.dev. The repo already ships
+# the processed CSVs the backtest reads, so skip this unless you are pulling new
+# data, and note that the incremental L2 endpoint requires an API key.
+tardis-dev>=2.0.0

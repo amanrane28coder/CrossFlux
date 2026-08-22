@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrossFlux — fee sensitivity</title>
+<style>
+  :root {
+    color-scheme: light;
+    --paper:    #E7EAE4;
+    --panel:    #F2F4EF;
+    --ink:      #171B1A;
+    --ink-soft: #545B58;
+    --rule:     #C7CCC3;
+    --fee:      #5B2A86;
+    --net:      #0E6B57;
+    --ochre:    #A8741F;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 56px 28px 96px; }
+  .prose { max-width: 68ch; }
+
+  /* ── type ─────────────────────────────────────────────────────────── */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 28px;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(28px, 5.2vw, 52px);
+    line-height: 1.06;
+    letter-spacing: -.035em;
+    font-weight: 500;
+    margin: 0 0 22px;
+    max-width: 22ch;
+  }
+  h1 em { font-style: normal; color: var(--fee); }
+  .standfirst { font-size: 17px; color: #2A302D; margin: 0 0 14px; }
+  .standfirst code, .prose code {
+    font-family: var(--mono);
+    font-size: .88em;
+    background: #D8DCD5;
+    padding: .1em .34em;
+    border-radius: 2px;
+  }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 6px;
+  }
+  .h2note { font-size: 14px; color: var(--ink-soft); margin: 0 0 26px; max-width: 66ch; }
+
+  section { margin-top: 68px; }
+
+  /* ── sieve ────────────────────────────────────────────────────────── */
+  .axis {
+    position: relative;
+    height: 15px;
+    margin-left: 176px;
+    margin-right: 200px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .axis span {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-soft);
+  }
+
+  .row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--rule);
+    padding: 15px 0;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+  .row:hover { background: #DEE2DA; }
+  .row:focus-visible { outline: 2px solid var(--fee); outline-offset: 2px; }
+  .row[aria-expanded="true"] { background: var(--panel); }
+
+  .rowgrid { display: grid; grid-template-columns: 176px 1fr 200px; align-items: center; gap: 0; }
+
+  .name { font-family: var(--mono); font-size: 12.5px; letter-spacing: -.01em; padding-right: 14px; }
+  .name b { font-weight: 600; display: block; font-size: 13.5px; }
+  .name i {
+    font-style: normal;
+    display: block;
+    color: var(--ink-soft);
+    font-size: 10.5px;
+    line-height: 1.45;
+  }
+
+  .bar { display: flex; height: 30px; align-items: stretch; }
+  .seg {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 7px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    transform-origin: left center;
+  }
+  .seg-fee { background: var(--fee); }
+  .seg-net { background: var(--net); }
+
+  .pop { padding-left: 22px; }
+  .dots { display: flex; flex-wrap: wrap; gap: 2.5px; width: 132px; margin-bottom: 4px; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); opacity: .82; }
+  .popn { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+
+  /* ── expandable detail ────────────────────────────────────────────── */
+  .detail { background: var(--panel); border-bottom: 1px solid var(--rule); padding: 0 20px; }
+  .detail[hidden] { display: none; }
+  .detail dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+    gap: 16px 22px;
+    margin: 20px 0;
+  }
+  .detail dt {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 2px;
+  }
+  .detail dd { font-family: var(--mono); font-size: 15px; margin: 0; letter-spacing: -.02em; }
+  .detail .note { font-size: 13.5px; color: #2A302D; margin: 0 0 20px; max-width: 70ch; }
+
+  /* ── identity table ───────────────────────────────────────────────── */
+  table { border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; width: 100%; }
+  caption {
+    text-align: left;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--ink-soft);
+    padding-bottom: 12px;
+    max-width: 66ch;
+  }
+  th, td { padding: 8px 14px 8px 0; text-align: right; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th {
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+  td.resid { color: var(--ink-soft); }
+
+  /* ── closing notes ────────────────────────────────────────────────── */
+  .claim { border-left: 3px solid var(--net); padding: 2px 0 2px 18px; margin: 0 0 26px; }
+  .claim.no { border-left-color: var(--fee); }
+  .claim h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    margin: 0 0 5px;
+    color: var(--ink-soft);
+  }
+  .claim p { margin: 0; font-size: 15.5px; }
+
+  .corr {
+    background: var(--panel);
+    border-top: 2px solid var(--ochre);
+    padding: 20px 22px;
+    margin-top: 26px;
+  }
+  .corr h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    margin: 0 0 10px;
+    color: var(--ochre);
+  }
+  .corr ol { margin: 0; padding-left: 20px; font-size: 15px; }
+  .corr li { margin-bottom: 9px; }
+  .corr li:last-child { margin-bottom: 0; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-soft);
+    line-height: 1.85;
+  }
+
+  .legend { display: flex; gap: 22px; flex-wrap: wrap; margin: 0 0 22px; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: baseline; }
+
+  @media (max-width: 720px) {
+    .rowgrid { grid-template-columns: 1fr; gap: 10px; }
+    .axis { display: none; }
+    .pop { padding-left: 0; }
+    .dots { width: 100%; }
+  }
+
+  /* Load-in: bars grow left-to-right, staggered by fee level. */
+  @media (prefers-reduced-motion: no-preference) {
+    .seg { animation: grow .62s cubic-bezier(.2,.8,.25,1) backwards; }
+    @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    .dot { animation: fade .5s ease backwards; }
+    @keyframes fade { from { opacity: 0; } to { opacity: .82; } }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">CrossFlux · fee sensitivity · BTCUSDT vs XBT-USD · 2024-03-01</p>
+
+  <h1>Raising fees cannot make this strategy <em>lose money</em>.</h1>
+
+  <div class="prose">
+    <p class="standfirst">
+      The backtest's entry gate is <code>margin &gt; fee</code>. The PnL it books is
+      <code>margin − fee</code>. Same inequality, same fee model — so a trade that
+      could not cover its fee is never taken in the first place.
+    </p>
+    <p class="standfirst">
+      Charging more therefore does not produce losses. It produces
+      <em>fewer trades</em>. Below, the round-trip fee goes from 0 to 14 basis points
+      across four presets and the strategy stays profitable in every one, because the
+      gate quietly raises its own bar to match.
+    </p>
+  </div>
+
+  <section>
+    <h2>The sieve</h2>
+    <p class="h2note">
+      Each bar is mean <strong>gross</strong> edge per trade, split into the part the
+      venues take and the part left over. Watch two things at once: the bars get
+      <em>longer</em> as fees rise, and the trade population collapses.
+    </p>
+
+    <div class="legend">
+      <span><i style="background:#5B2A86"></i>fee taken, bps</span>
+      <span><i style="background:#0E6B57"></i>net kept, bps</span>
+      <span><i style="background:#171B1A;border-radius:50%"></i>1 dot = 10,000 filled trades</span>
+    </div>
+
+    <div class="axis" id="axis"></div>
+    <div id="sieve"></div>
+  </section>
+
+  <section>
+    <h2>Why the bars grow</h2>
+    <div class="prose">
+      <p>
+        A wider fee forces the gate to hold out for a wider spread, so the trades that
+        survive have more gross edge on average — 4.84&nbsp;bps when fees are zero,
+        15.79&nbsp;bps at retail rates. That rise is <strong>selection</strong>, not
+        signal quality. The underlying predictor never changed between these four runs;
+        only the threshold did.
+      </p>
+      <p>
+        Which means gross edge is not a property of the market being measured. It is a
+        readout of the fee you fed in. Any figure quoted as "mean gross edge" is really
+        just reporting the gate threshold back at you.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>The identity, checked</h2>
+    <table id="identity">
+      <caption>
+        If the gate and the PnL are the same inequality, then net edge must equal gross
+        edge minus the fee in every run. It does, to within 0.005 bps — the small
+        residual is real, not float error: each leg pays its own venue's rate on its own
+        notional, and the two legs' notionals differ slightly. That near-exact identity
+        is the arithmetic signature of a metric that cannot come out negative.
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">preset</th>
+          <th scope="col">gross bps</th>
+          <th scope="col">− fee bps</th>
+          <th scope="col">= implied net</th>
+          <th scope="col">measured net</th>
+          <th scope="col">residual</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>What this does and doesn't show</h2>
+
+    <div class="claim">
+      <h3>Shown</h3>
+      <p>
+        The fee model is now single-sourced. One registry drives the Python backtest,
+        the execution simulator and the C++ engine, and swapping presets needs no code
+        edit. Rates agree across both languages to six decimal places.
+      </p>
+    </div>
+
+    <div class="claim no">
+      <h3>Not shown</h3>
+      <p>
+        Any evidence the strategy has edge. Every return on this page is positive by
+        construction. Until the entry criterion is independent of the PnL formula, no
+        fee schedule can falsify it — and win rate is uninformative for the same
+        reason, sitting between 96.9% and 99.6% regardless of preset.
+      </p>
+    </div>
+
+    <div class="claim no">
+      <h3>Also not executable</h3>
+      <p>
+        The default preset implies 3.56 two-leg round trips per second sustained for 24
+        hours, with capital pre-positioned on both venues. Retail nets 1.78&nbsp;bps per
+        trade — thin enough that any unmodelled cost, from funding to rebalancing to
+        partial fills, plausibly erases it.
+      </p>
+    </div>
+
+    <div class="corr">
+      <h3>Two corrections to earlier claims</h3>
+      <ol>
+        <li>
+          The institutional preset was described as 6&nbsp;bps round-trip. It is
+          <strong>3.0</strong> — Binance 1&nbsp;bp plus Kraken 2&nbsp;bps.
+        </li>
+        <li>
+          Retail fees were expected to turn the strategy negative. They do not: retail
+          returns <strong>+2.5%</strong>. The earlier negative figure came from an
+          inconsistent setup, where the gate still used the old flat 5&nbsp;bps per leg
+          while the PnL used retail rates. Once both read one model, the sign returns to
+          positive — which is the whole finding.
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    source · backtest/compare_fee_presets.py → backtest/fee_preset_comparison.csv<br>
+    fee registry · src/fees.py · presets selectable via $CROSSFLUX_FEE_PRESET<br>
+    data · data/raw/binance_book_snapshot_5_2024-03-01_BTCUSDT.csv.gz, kraken_book_snapshot_5_2024-03-01_XBT-USD.csv.gz<br>
+    reproduce · python3 -m backtest.compare_fee_presets
+  </footer>
+
+</div>
+
+<script>
+"use strict";
+
+// Measured values, copied verbatim from backtest/fee_preset_comparison.csv.
+// Ordered by round-trip fee so the sieve reads top-to-bottom as increasing friction.
+const RUNS = [
+  { preset: "zero", label: "diagnostic only", rt: 0.0,
+    signals: 541625, filled: 540985, rejected: 640,
+    grossBps: 4.843572104773039, netBps: 4.843572104773039,
+    grossUsd: 162438.90616619814, feesUsd: 0.0, netUsd: 162438.90616619814,
+    perTrade: 0.3002650834426059, notional: 335370058.8169725,
+    ret: 162.43890616619814, win: 99.56043143525235, sharpe: 25.45599670274357,
+    note: "No friction at all. Isolates the raw signal: the unfiltered edge is 4.84 bps gross per trade. Not a result — a reference point." },
+
+  { preset: "institutional", label: "default · binance 1 / kraken 2", rt: 3.0,
+    signals: 307881, filled: 307447, rejected: 434,
+    grossBps: 7.278307974737725, netBps: 4.277944936589594,
+    grossUsd: 139313.99505229594, feesUsd: 57429.90855875712, netUsd: 81884.08649353881,
+    perTrade: 0.2663356171747937, notional: 191409865.5014885,
+    ret: 81.88408649353882, win: 98.8622429231705, sharpe: 22.855729867083635,
+    note: "VIP tier, and the current default. Reports the second-highest return of any preset purely because it filters the least among the realistic schedules." },
+
+  { preset: "legacy_flat", label: "retired · flat 5 / 5", rt: 10.0,
+    signals: 58909, filled: 58664, rejected: 245,
+    grossBps: 13.422434746073684, netBps: 3.422434746072976,
+    grossUsd: 49239.586179358780, feesUsd: 36684.541300352220, netUsd: 12555.044879006564,
+    perTrade: 0.2140161748091941, notional: 36684541.300349616,
+    ret: 12.555044879006571, win: 98.18116732578753, sharpe: 27.837629249467085,
+    note: "The flat constant previously hardcoded in backtest/engine.py. Kept so historical numbers stay reproducible, but not a real schedule — Kraken's taker fee is not 5 bps." },
+
+  { preset: "retail", label: "binance 4 / kraken 10", rt: 14.0,
+    signals: 22364, filled: 22300, rejected: 64,
+    grossBps: 15.786445994371144, netBps: 1.7817100605731508,
+    grossUsd: 22030.58936791345, feesUsd: 19544.144810907823, netUsd: 2486.444557005618,
+    perTrade: 0.1114997559195344, notional: 13955382.595784212,
+    ret: 2.4864445570056124, win: 96.8609865470852, sharpe: 21.90368555025996,
+    note: "The strictest realistic schedule, and what a non-VIP account actually pays. Still positive, but 1.78 bps net per trade on 22,300 trades." },
+];
+
+const AXIS_MAX = 16;              // bps; covers the widest bar (15.79)
+const TRADES_PER_DOT = 10000;
+
+const fmt = {
+  n:   v => v.toLocaleString("en-US"),
+  usd: v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  // Net per trade is a fraction of a dollar; 2 dp would round 0.2663 to 0.27
+  // and hide the difference between presets.
+  cents: v => "$" + v.toFixed(4),
+  bps: v => v.toFixed(2),
+};
+
+// ── axis ────────────────────────────────────────────────────────────────
+const axis = document.getElementById("axis");
+[0, 4, 8, 12, 16].forEach(t => {
+  const s = document.createElement("span");
+  s.style.left = (t / AXIS_MAX * 100) + "%";
+  s.textContent = t === 16 ? "16 bps" : String(t);
+  axis.appendChild(s);
+});
+
+// ── sieve rows ──────────────────────────────────────────────────────────
+const sieve = document.getElementById("sieve");
+
+RUNS.forEach((r, i) => {
+  const delay = (i * 0.11).toFixed(2) + "s";
+  const feePct = r.rt / AXIS_MAX * 100;
+  const netPct = r.netBps / AXIS_MAX * 100;
+
+  const btn = document.createElement("button");
+  btn.className = "row";
+  btn.type = "button";
+  btn.setAttribute("aria-expanded", "false");
+  btn.id = "row-" + r.preset;
+  btn.setAttribute("aria-controls", "detail-" + r.preset);
+
+  // Fee segment is omitted entirely at zero rather than rendered as a sliver.
+  // Labels are bare numbers; the legend carries the fee/net distinction, which
+  // keeps them short enough never to clip retail's narrow net segment.
+  const feeSeg = r.rt > 0
+    ? `<div class="seg seg-fee" style="width:${feePct}%;animation-delay:${delay}">${
+        feePct > 9 ? "−" + fmt.bps(r.rt) : ""
+      }</div>`
+    : "";
+
+  btn.innerHTML = `
+    <div class="rowgrid">
+      <div class="name">
+        <b>${r.preset}</b>
+        <i>${r.label}</i>
+        <i>${fmt.bps(r.rt)} bps round-trip</i>
+      </div>
+      <div class="bar">
+        ${feeSeg}
+        <div class="seg seg-net" style="width:${netPct}%;animation-delay:${delay}">${fmt.bps(r.netBps)}</div>
+      </div>
+      <div class="pop">
+        <div class="dots">${
+          Array.from({ length: Math.max(1, Math.round(r.filled / TRADES_PER_DOT)) },
+            (_, d) => `<span class="dot" style="animation-delay:${(i * 0.11 + d * 0.006).toFixed(3)}s"></span>`).join("")
+        }</div>
+        <div class="popn">${fmt.n(r.filled)} trades</div>
+      </div>
+    </div>`;
+
+  const detail = document.createElement("div");
+  detail.className = "detail";
+  detail.id = "detail-" + r.preset;
+  detail.hidden = true;
+  detail.innerHTML = `
+    <p class="note">${r.note}</p>
+    <dl>
+      <div><dt>gross pnl</dt><dd>${fmt.usd(r.grossUsd)}</dd></div>
+      <div><dt>fees paid</dt><dd style="color:#5B2A86">${fmt.usd(r.feesUsd)}</dd></div>
+      <div><dt>net pnl</dt><dd style="color:#0E6B57">${fmt.usd(r.netUsd)}</dd></div>
+      <div><dt>return</dt><dd>${r.ret.toFixed(2)}%</dd></div>
+      <div><dt>net per trade</dt><dd>${fmt.cents(r.perTrade)}</dd></div>
+      <div><dt>notional traded</dt><dd>${fmt.usd(r.notional)}</dd></div>
+      <div><dt>signals</dt><dd>${fmt.n(r.signals)}</dd></div>
+      <div><dt>rejected</dt><dd>${fmt.n(r.rejected)}</dd></div>
+      <div><dt>trades / sec</dt><dd>${(r.filled / 86400).toFixed(2)}</dd></div>
+      <div><dt>win rate</dt><dd>${r.win.toFixed(1)}% <span style="font-size:11px;color:#545B58">(uninformative)</span></dd></div>
+      <div><dt>sharpe</dt><dd>${r.sharpe.toFixed(2)}</dd></div>
+    </dl>`;
+
+  btn.addEventListener("click", () => {
+    const open = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", String(!open));
+    detail.hidden = open;
+  });
+
+  sieve.append(btn, detail);
+});
+
+// ── identity table ──────────────────────────────────────────────────────
+const tbody = document.querySelector("#identity tbody");
+RUNS.forEach(r => {
+  const implied = r.grossBps - r.rt;
+  const resid = r.netBps - implied;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <th scope="row" style="font-weight:600">${r.preset}</th>
+    <td>${r.grossBps.toFixed(4)}</td>
+    <td style="color:#5B2A86">${r.rt.toFixed(4)}</td>
+    <td>${implied.toFixed(4)}</td>
+    <td style="color:#0E6B57">${r.netBps.toFixed(4)}</td>
+    <td class="resid">${resid === 0 ? "0" : resid.toExponential(1)}</td>`;
+  tbody.appendChild(tr);
+});
+</script>
+</body>
+</html>

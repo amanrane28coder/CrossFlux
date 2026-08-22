@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CrossFlux — metric CSS bisect</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b0e11; color:#eaecef; font-family:-apple-system,'Inter',sans-serif; margin:0; padding:24px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 4px; }
+  p.lead { font-size:12px; color:#9ca3af; max-width:900px; line-height:1.6; margin:0 0 20px; }
+  code { font-family:'JetBrains Mono',ui-monospace,monospace; background:#1e2329; padding:1px 4px; border-radius:3px; font-size:11px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .pane { border:1px solid #2b3139; border-radius:6px; padding:14px; background:#0f1217; }
+  .pane h2 { font-size:12px; margin:0 0 2px; font-family:'JetBrains Mono',monospace; letter-spacing:.04em; }
+  .pane.old h2 { color:#ef4444; }
+  .pane.new h2 { color:#22c55e; }
+  .pane .sub { font-size:10px; color:#6b7280; margin:0 0 14px; }
+  .spec { border-top:1px solid #1e2329; padding:10px 0 4px; }
+  .spec > .cap { font-size:9px; color:#6b7280; font-family:'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px; }
+  .verdict { margin-top:22px; border:1px solid #2b3139; border-radius:6px; padding:14px 16px; background:#0f1217; font-size:12px; line-height:1.7; color:#d1d5db; max-width:1000px; }
+  .verdict b { color:#eaecef; }
+
+  /* ── Streamlit's own metric styling, approximated (both panes inherit this) ── */
+  .pane [data-testid="stMetricLabel"], .pane label { display:block; font-size:14px; color:#a3a8af; }
+  .pane [data-testid="stMetricValue"] { font-size:26px; color:#fafafa; }
+  .pane [data-testid="stMetricDelta"] { font-size:14px; color:#09ab3b; display:flex; align-items:center; gap:2px; }
+  /* Streamlit ships a screen-reader copy of the value. Two utilities have been
+     used for it across versions; both appear below because they fail differently. */
+  .pane .sr-abs { position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+                  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .pane .sr-flow { overflow:hidden; height:0; }
+  /* Older Streamlit drew the delta arrow as generated content, newer uses <svg>. */
+  .pane .legacy-delta::before { content:"▲"; font-size:12px; }
+
+  /* ══ PANE A: the CSS that was in app.py (lines 31-37) ══════════════════════ */
+  .old div[data-testid="metric-container"] { background:transparent; border:none; padding:.15rem .1rem .15rem 0; }
+  .old div[data-testid="metric-container"] label { color:#6b7280 !important; font-weight:500 !important; font-size:.55rem !important; text-transform:uppercase; letter-spacing:.04em; }
+  .old div[data-testid="metric-container"] [data-testid="stMetricValue"] { color:#eaecef !important; font-weight:500 !important; font-size:.85rem !important; font-family:'JetBrains Mono',monospace !important; line-height:1.4; }
+  .old div[data-testid="metric-container"] [data-testid="stMetricDelta"] { font-size:.6rem !important; font-weight:400 !important; color:#6b7280 !important; }
+  .old div[data-testid="metric-container"] [data-testid="stMetricDelta"] svg { display:none; }
+  .old div[data-testid="stMetricValue"] div { display:inline; }          /* ← prime suspect */
+  .old div[data-testid="stMetricDelta"]::before { content:none !important; }
+
+  /* ══ PANE B: the replacement CSS ═══════════════════════════════════════════ */
+  .new div[data-testid="stMetric"], .new div[data-testid="metric-container"] { background:transparent; border:none; padding:.15rem .1rem .15rem 0; }
+  .new div[data-testid="stMetric"] label, .new div[data-testid="metric-container"] label { color:#6b7280 !important; font-weight:500 !important; font-size:.55rem !important; text-transform:uppercase; letter-spacing:.04em; }
+  .new [data-testid="stMetricValue"] { color:#eaecef !important; font-weight:500 !important; font-size:.85rem !important; font-family:'JetBrains Mono',monospace !important; line-height:1.4; }
+  .new [data-testid="stMetricDelta"] { font-size:.6rem !important; font-weight:400 !important; color:#6b7280 !important; }
+  .new [data-testid="stMetricDelta"] svg { display:none; }
+  .new [data-testid="stMetricDelta"]::before { content:none !important; }
+  .new [data-testid="stMetricValue"] [aria-hidden="true"],
+  .new [data-testid="stMetricDelta"] [aria-hidden="true"],
+  .new [data-testid="stMetricValue"] .visually-hidden,
+  .new [data-testid="stMetricDelta"] .visually-hidden { display:none !important; }
+  .new [data-testid="stMetricValue"] { white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<h1>Metric CSS bisect — is <code>display: inline</code> the ghosting cause?</h1>
+<p class="lead">
+<b style="color:#22c55e;">Resolved 2026-08-21: yes.</b> Pane A ghosts, pane B renders cleanly, confirmed
+in-browser by the maintainer. The pane B rules below are the ones now live in
+<code>dashboard/app.py</code>. This file is kept as the regression check — if metric ghosting ever
+returns, open it first to tell a CSS cause from a rendering/refresh cause.
+</p>
+<p class="lead">
+Each pane renders the same four Streamlit metric DOM shapes. Left applies the CSS that was in
+<code>dashboard/app.py</code> lines 31–37; right applies the replacement. Every metric should read
+<b>exactly one</b> value. Any specimen showing its number twice is reproducing the ghosting bug —
+compare which pane it happens in. Specimens 1 and 3 carry the screen-reader duplicate that
+Streamlit emits alongside the visible value; specimen 2 has none, as a control.
+</p>
+
+<div class="grid">
+
+  <div class="pane old">
+    <h2>A — CSS as it was in app.py</h2>
+    <p class="sub">includes <code>div[data-testid="stMetricValue"] div { display: inline }</code></p>
+
+    <div class="spec"><div class="cap">1 · modern DOM (stMetric) + sr copy in normal flow</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">Win Rate</label>
+        <div data-testid="stMetricValue"><div>99.0%</div><div class="sr-flow" aria-hidden="true">99.0%</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">2 · modern DOM, no sr copy (control)</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">Signals/s</label>
+        <div data-testid="stMetricValue"><div>10.3</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">3 · legacy DOM (metric-container) + absolute sr copy</div>
+      <div data-testid="metric-container">
+        <label>Position</label>
+        <div data-testid="stMetricValue"><div>0.0500</div><div class="sr-abs" aria-hidden="true">0.0500</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">4 · delta: svg arrow + legacy ::before arrow</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">PnL</label>
+        <div data-testid="stMetricValue"><div>$6,900.12</div></div>
+        <div data-testid="stMetricDelta" class="legacy-delta">
+          <svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,0 10,10 0,10" fill="#09ab3b"/></svg>
+          <span>31,501 fills</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pane new">
+    <h2>B — replacement CSS</h2>
+    <p class="sub">blanket <code>display: inline</code> removed; sr copies pinned hidden; both test ids targeted</p>
+
+    <div class="spec"><div class="cap">1 · modern DOM (stMetric) + sr copy in normal flow</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">Win Rate</label>
+        <div data-testid="stMetricValue"><div>99.0%</div><div class="sr-flow" aria-hidden="true">99.0%</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">2 · modern DOM, no sr copy (control)</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">Signals/s</label>
+        <div data-testid="stMetricValue"><div>10.3</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">3 · legacy DOM (metric-container) + absolute sr copy</div>
+      <div data-testid="metric-container">
+        <label>Position</label>
+        <div data-testid="stMetricValue"><div>0.0500</div><div class="sr-abs" aria-hidden="true">0.0500</div></div>
+      </div>
+    </div>
+
+    <div class="spec"><div class="cap">4 · delta: svg arrow + legacy ::before arrow</div>
+      <div data-testid="stMetric">
+        <label data-testid="stMetricLabel">PnL</label>
+        <div data-testid="stMetricValue"><div>$6,900.12</div></div>
+        <div data-testid="stMetricDelta" class="legacy-delta">
+          <svg width="10" height="10" viewBox="0 0 10 10"><polygon points="5,0 10,10 0,10" fill="#09ab3b"/></svg>
+          <span>31,501 fills</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="verdict">
+  <b>Outcome.</b> Pane A ghosts on specimen 1, pane B does not. The load-bearing change is removing
+  <code>div[data-testid="stMetricValue"] div { display: inline }</code>: Streamlit's screen-reader copy
+  of the value hides itself with <code>overflow:hidden; height:0</code>, and <code>height</code> does
+  not apply to a non-replaced inline box — so forcing every descendant inline puts that copy back into
+  the visible flow. Specimen 3's copy uses <code>position:absolute</code> instead, which re-blockifies
+  and therefore survives; that is why the bug looked intermittent across metrics rather than affecting
+  all of them. The <code>[aria-hidden]</code> / <code>.visually-hidden</code> suppressors in pane B are
+  belt-and-braces on top of that.
+  <br><br>
+  <b>Second, independent defect fixed at the same time.</b> Pane A's rules are all scoped to
+  <code>metric-container</code>, a test id Streamlit renamed to <code>stMetric</code> around 1.28 — on a
+  current version most of pane A's styling silently does nothing. Pane B targets both, which is why the
+  label/value sizing also changed appearance when the fix went in.
+  <br><br>
+  <b>If ghosting ever returns.</b> Open this file first. If pane A ghosts and pane B is clean, the CSS
+  in <code>app.py</code> has regressed — check that no rule sets <code>display</code> on descendants of
+  <code>stMetricValue</code>. If <i>both</i> panes are clean yet the live dashboard doubles, the cause is
+  not this CSS; the next suspect is the 1&nbsp;second <code>st_autorefresh</code> at
+  <code>app.py:14</code> interacting with the raw-HTML blocks, and the thing to capture is a devtools
+  DOM snippet of one doubled metric.
+  <br><br>
+  <b>Caveat.</b> The panes here are prefixed with <code>.old</code>/<code>.new</code> for side-by-side
+  isolation, so specificity is one class higher than in the real app; the cascade that matters (the
+  <code>display</code> override versus the hiding utility) is unchanged.
+</div>
+
+</body>
+</html>

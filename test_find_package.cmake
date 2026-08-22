@@ -1,0 +1,6 @@
+find_package(boost_thread 1.90.0 EXACT CONFIG QUIET HINTS /opt/homebrew/opt/boost/lib/cmake)
+if(boost_thread_FOUND)
+    message(STATUS "Found boost_thread")
+else()
+    message(STATUS "Did not find boost_thread")
+endif()
