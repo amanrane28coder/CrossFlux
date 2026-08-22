@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>⚡ Cross-Venue Arbitrage Predictor</h1>
+  <h1>⚡ CrossFlux</h1>
   <p><strong>Nanosecond-Optimized HFT Architecture for Structural OBI Dislocations</strong></p>
 
   <!-- Badges -->
