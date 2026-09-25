@@ -1,11 +1,11 @@
 <div align="center">
   <h1>⚡ CrossFlux</h1>
-  <p><strong>Nanosecond-Optimized HFT Architecture for Cross-Venue Latency Arbitrage</strong></p>
+  <p><strong>Cross-venue market-data research and execution simulation</strong></p>
 
   <!-- Badges -->
   <p>
     <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg" alt="C++20" />
-    <img src="https://img.shields.io/badge/Python-3.14-blue.svg" alt="Python 3.14" />
+    <img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+" />
     <img src="https://img.shields.io/badge/Architecture-SPSC%20Lock--Free-orange.svg" alt="Lock-Free Architecture" />
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License" />
   </p>
@@ -13,27 +13,18 @@
 
 ---
 
-## 📖 Executive Summary
-The **Cross-Venue Arbitrage Predictor** is a high-frequency trading (HFT) infrastructure engine designed to identify and execute on structural Order Book Imbalance (OBI) dislocations across fragmented liquidity venues (e.g., Binance vs. Kraken). 
+## 📖 Project Status
+CrossFlux is a research prototype for cross-venue order-book signals, market-data ingestion, backtesting experiments, and a dashboard. The C++ executable currently uses simulated execution: it does **not** authenticate to Binance or Kraken or submit, cancel, or reconcile exchange orders. Do not use it to trade real funds.
 
-Engineered for strict sub-microsecond latency boundaries, this system pushes real-time WebSocket tick evaluation entirely to a custom C++ hardware-aligned core, eliminating Python's GIL overhead from the hot execution path. 
+The backtester has a configurable latency and VWAP book-walking model, with separate fees and legging costs. It remains a simulation: it does not model queue priority, exchange acknowledgements, exchange-confirmed fills, balances, or venue outages. Performance figures in older reports are not endorsed until reproduced from the exact source revision and data files.
 
-*Note: Following rigorous internal audits, the backtested strategy focuses on realistic capacity modeling, slippage, and latency rather than theoretical "perfect" execution. The system demonstrates genuine capacity limits and realistic win rates under strict VWAP book-walking constraints.*
+## 🏗️ Architecture
+The repository contains a Python signal/backtest/dashboard stack and a C++ market-data and signal-processing stack. WebSocket market data and simulated order dispatch are useful for research and local demonstrations. The README previously described lock-free ingestion, core pinning, and sub-microsecond end-to-end evaluation as production characteristics; those performance claims need reproducible benchmark evidence and should not be read as verified end-to-end trading latency.
 
-## 🏗️ Architecture Deep Dive
-This engine is built on absolute performance and hardware-level determinism.
+## 🔬 Backtesting Limits
+The Python backtester can delay each simulated leg, fill against the prevailing book, walk available levels for VWAP, charge venue-specific fees on filled notional, and price residual legging risk. These are explicit assumptions, not exchange-confirmed fills. It does not model queue priority, order acknowledgements, inventory constraints, funding, or venue outages. Real-data runs require both venue files; synthetic data is an explicit demo mode. `scripts/run_backtest.py` refuses to silently replace missing historical files with generated data; use `--synthetic` only for a demonstration.
 
-*   **Sub-Microsecond Evaluation Core**: The central `SignalAggregator` evaluation loop leverages purely FMA arithmetic, eliminating transcendental function branches on the hot path. (Note: Benchmark times like 66ns reflect the early OBI computations and gating logic prior to full signal vector construction).
-*   **Zero-Copy Memory Layout**: Custom `PriceLevel` and `OrderBookSnapshot` structs are strictly mapped for contiguous L2 cache alignment, maximizing hardware prefetcher efficiency and eliminating cache misses.
-*   **Lock-Free SPSC Ring Buffer**: Real-time network ingestion is entirely decoupled from the execution loop. An asynchronous `Boost.Beast` thread pushes live market updates into a single-producer, single-consumer (SPSC) lock-free ring buffer, allowing the execution spin-loop to pop and evaluate without locking, blocking, or yielding the CPU.
-*   **Thread Affinity & Pinning**: Core pinning protocols lock the network receiver and execution loops strictly to isolated CPU cores, circumventing OS context switches and thread migrations.
-
-## 🔬 Backtesting Rigor
-True alpha validation requires merciless execution constraints. The included event-driven backtester natively parses over **2 million rows** of real Level 2 Tardis.dev snapshot data without relying on generalized abstractions.
-
-*   **Taker Friction & Latency**: Dual-leg execution costs (0.10% total taker fee friction) and network latency are rigorously modeled. A trade that turns against the model during the latency window is correctly booked as a loss.
-*   **VWAP Order Book Walking**: The engine evaluates fills against the *prevailing* quote at `T + latency`. The fill price is the Volume-Weighted Average Price (VWAP) of the levels the order actually consumes, completely eliminating "touch price" tautologies.
-*   **Realistic Results & Capacity Limits**: Swept across order sizes, the strategy exhibits a realistic capacity curve. At 0.01 BTC, it maintains a ~98.6% win rate, which naturally decays as slippage increases with size. Net PnL is shown to peak at an optimal size (e.g., 3.0 BTC per leg at 85.3% win rate), proving the strategy is falsifiable and respects real-world liquidity bounds.
+Do not interpret synthetic-feed output as evidence of strategy profitability. For historical experiments, record the source files, checksums, time range, fee schedule, latency distribution, order size, and command used. Publish performance claims only with that reproducible run and the matching output artifact.
 
 ## 📊 Analytics Dashboard
 The repository features an interactive web visualization suite built on `Streamlit` and `Plotly` for deep introspection of execution logs:
@@ -56,12 +47,18 @@ pip install -r requirements.txt
 mkdir -p .streamlit
 echo -e "[theme]\nbase = \"dark\"\nfont = \"monospace\"" > .streamlit/config.toml
 
-# 4. Launch the synthetic demo feed (or start the C++ backend)
+# 4. Start the local simulated demo feed
 python3 dashboard/seed_demo_feed.py &
 
-# 5. Spin up the terminal UI
+# Optional: generated-data simulation (demo only)
+python3 scripts/run_backtest.py --synthetic
+
+# 5. Launch the dashboard
 streamlit run dashboard/app.py
 ```
 
 ---
-*Disclaimer: This repository is intended for research and educational purposes. Always simulate strategies extensively before deploying live capital.*
+## Live-Trading Readiness
+This repository is **not live-trading ready**. Before any live adapter is considered, implement venue-specific order submission, exchange-rule validation (quantity steps, minimum quantity/notional, and price ticks), authenticated fill/order-state reconciliation, explicit partial-fill and legging recovery, balance/inventory checks, rate-limit and reconnect handling, and a hard operator kill switch. Begin with exchange validation/dry-run modes and paper trading. Binance documents symbol filters and order-state APIs in its [official Spot API docs](https://developers.binance.com/en/docs/products/spot/rest-api); Kraken documents [WebSocket v2 order submission](https://docs-legacy.kraken.com/api/docs/websocket-v2/add_order/) and [book integrity guidance](https://docs.kraken.com/api/docs/guides/spot-ws-book-v2). These venue features are prerequisites to implement and verify, not capabilities this project currently provides.
+
+*For research and education only. No profitability or execution-quality claim is guaranteed.*

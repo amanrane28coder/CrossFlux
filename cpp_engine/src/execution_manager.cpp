@@ -1,4 +1,4 @@
-#include "execution_manager.hpp"
+#include "../include/execution_manager.hpp"
 #include "execution.hpp"
 #include "fee_config.hpp"
 #include <cmath>
@@ -210,7 +210,8 @@ bool SimulatedExecutor::check_risk_guards(
 bool SimulatedExecutor::evaluate_and_execute(
     const ArbitrageSignal& signal,
     double bid_price_a, double ask_price_a,
-    double bid_price_b, double ask_price_b
+    double bid_price_b, double ask_price_b,
+    double qty
 ) {
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -232,7 +233,6 @@ bool SimulatedExecutor::evaluate_and_execute(
 
     double buy_price, sell_price;
     std::string buy_ex, sell_ex;
-    const double qty = 0.01;
 
     if (signal.action == TradeAction::BUY_A_SELL_B) {
         buy_price = ask_price_a;
@@ -375,10 +375,16 @@ SimulatedOrderDispatcher::SimulatedOrderDispatcher(
 }
 
 bool SimulatedOrderDispatcher::execute(const DispatchSignal& ds) noexcept {
+    return execute(ds, 0.01);
+}
+
+bool SimulatedOrderDispatcher::execute(const DispatchSignal& ds, double qty) noexcept {
+    if (!std::isfinite(qty) || qty <= 0.0) return false;
     return executor_.evaluate_and_execute(
         ds.signal,
         ds.bid_price_a, ds.ask_price_a,
-        ds.bid_price_b, ds.ask_price_b
+        ds.bid_price_b, ds.ask_price_b,
+        qty
     );
 }
 
@@ -446,6 +452,10 @@ double SimulatedOrderDispatcher::min_profit_bps() const noexcept {
 
 bool SimulatedOrderDispatcher::is_cooldown_active(uint64_t now_ms) const noexcept {
     return executor_.is_cooldown_active(now_ms);
+}
+
+std::shared_ptr<CircuitBreaker> SimulatedOrderDispatcher::risk_mgr() const noexcept {
+    return executor_.risk_mgr();
 }
 
 } // namespace crossflux

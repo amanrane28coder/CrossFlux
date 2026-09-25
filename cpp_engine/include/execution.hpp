@@ -66,6 +66,10 @@ public:
 
     bool execute(const DispatchSignal& ds) noexcept override;
 
+    // Simulation-only overload used by sizing policies. Keeps the requested
+    // quantity all the way through the simulated execution path.
+    bool execute(const DispatchSignal& ds, double qty) noexcept;
+
     ExecutionResult execute_buy(
         const std::string& exchange, 
         double price, 
@@ -87,6 +91,7 @@ public:
     double cooldown_ms() const noexcept;
     double min_profit_bps() const noexcept;
     bool is_cooldown_active(uint64_t now_ms) const noexcept;
+    std::shared_ptr<CircuitBreaker> risk_mgr() const noexcept;
 
 private:
     SimulatedExecutor executor_;

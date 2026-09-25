@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <functional>
 
 #include "models.hpp"
 #include "predictor.hpp"
@@ -52,6 +53,12 @@ public:
     /** Submit a market tick for processing (thread-safe). */
     void push_tick(const MarketTick<>& tick);
 
+    /** Register a callback for each venue snapshot consumed by the evaluator.
+     * Set it before start(); it runs on the evaluation thread.
+     */
+    void set_book_update_callback(
+        std::function<void(const OrderBookSnapshot<>&)> callback);
+
     /** Destructor. */
     ~IngestionEngine();
 
@@ -73,6 +80,7 @@ private:
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::queue<MarketTick<>> tick_queue_;
+    std::function<void(const OrderBookSnapshot<>&)> book_update_callback_;
 
     // Signal queue (evaluation thread -> dispatch thread)
     std::mutex signal_mutex_;

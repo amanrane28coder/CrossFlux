@@ -130,7 +130,8 @@ public:
     bool evaluate_and_execute(
         const ArbitrageSignal& signal,
         double bid_price_a, double ask_price_a,
-        double bid_price_b, double ask_price_b
+        double bid_price_b, double ask_price_b,
+        double qty = 0.01
     );
 
     double current_position() const noexcept { return position_.load(std::memory_order_acquire); }

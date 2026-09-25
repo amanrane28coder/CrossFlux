@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <system_error> // std::error_code
+#include <stdexcept>
 
 namespace crossflux {
 
@@ -176,6 +177,14 @@ void IngestionEngine::stop() {
     std::cout << "[IngestionEngine] Stopped" << std::endl;
 }
 
+void IngestionEngine::set_book_update_callback(
+    std::function<void(const OrderBookSnapshot<>&)> callback) {
+    if (running_.load(std::memory_order_acquire)) {
+        throw std::logic_error("book callback must be set before IngestionEngine::start");
+    }
+    book_update_callback_ = std::move(callback);
+}
+
 void IngestionEngine::push_tick(const MarketTick<>& tick) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -213,18 +222,43 @@ void IngestionEngine::evaluation_loop() noexcept {
                 break;
             }
 
-            // Store this tick's snapshot under the correct exchange
-            // Each tick has two identical snapshots from the same exchange
-            std::string_view ex = tick.snap_a.exchange();
+            // Each websocket client wraps its one venue snapshot in both sides of
+            // MarketTick. Store only the matching venue and ignore out-of-order data.
+            const auto& update = tick.snap_a;
+            const std::string_view ex = update.exchange();
+            if (update.bid_depth == 0 || update.ask_depth == 0 ||
+                update.bids[0].price <= 0.0 || update.asks[0].price <= update.bids[0].price)
+                continue;
+
             if (ex == ex_a) {
-                snap_a_opt = tick.snap_a;
+                if (snap_a_opt && update.timestamp_ms < snap_a_opt->timestamp_ms) continue;
+                snap_a_opt = update;
             } else if (ex == ex_b) {
-                snap_b_opt = tick.snap_b;
+                if (snap_b_opt && update.timestamp_ms < snap_b_opt->timestamp_ms) continue;
+                snap_b_opt = update;
+            } else {
+                continue;
+            }
+            if (book_update_callback_) {
+                try {
+                    book_update_callback_(update);
+                } catch (const std::exception& e) {
+                    std::cerr << "[EvalLoop] Book callback failed: " << e.what() << std::endl;
+                }
             }
 
-            // If we have snapshots from both exchanges, create a cross-exchange pair
-            if (snap_a_opt && snap_b_opt) {
-                uint64_t ts = std::min(snap_a_opt->timestamp_ms, snap_b_opt->timestamp_ms);
+            // Require both valid books and keep the pair recent. A stale venue
+            // snapshot must not be paired with every new tick from the other venue.
+            if (snap_a_opt && snap_b_opt &&
+                snap_a_opt->bid_depth > 0 && snap_a_opt->ask_depth > 0 &&
+                snap_b_opt->bid_depth > 0 && snap_b_opt->ask_depth > 0) {
+                constexpr uint64_t kMaxBookSkewMs = 1000;
+                const uint64_t older_ts = std::min(snap_a_opt->timestamp_ms,
+                                                   snap_b_opt->timestamp_ms);
+                const uint64_t newer_ts = std::max(snap_a_opt->timestamp_ms,
+                                                   snap_b_opt->timestamp_ms);
+                if (newer_ts - older_ts > kMaxBookSkewMs) continue;
+                const uint64_t ts = newer_ts;
                 MarketTick<> cross_tick = make_market_tick(ts, *snap_a_opt, *snap_b_opt);
 
                 std::vector<ArbitrageSignal> signals = signal_aggregator_->evaluate(

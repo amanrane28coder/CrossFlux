@@ -25,12 +25,12 @@ struct Schedule {
     double fallback_taker;   // conservative: the most expensive modelled venue
 };
 
-inline constexpr Schedule kInstitutional{"institutional", 0.000100, 0.000200, 0.000200};
-inline constexpr Schedule kRetail{"retail", 0.000400, 0.001000, 0.001000};
-inline constexpr Schedule kZero{"zero", 0.000000, 0.000000, 0.000000};
-inline constexpr Schedule kLegacyFlat{"legacy_flat", 0.000500, 0.000500, 0.000500};
+inline const Schedule kInstitutional{"institutional", 0.000100, 0.000200, 0.000200};
+inline const Schedule kRetail{"retail", 0.000400, 0.001000, 0.001000};
+inline const Schedule kZero{"zero", 0.000000, 0.000000, 0.000000};
+inline const Schedule kLegacyFlat{"legacy_flat", 0.000500, 0.000500, 0.000500};
 
-inline constexpr Schedule kDefaultSchedule = kInstitutional;
+inline const Schedule kDefaultSchedule = kInstitutional;
 
 // src/fees.py lowercases the requested preset name; match that here so the two
 // sides accept exactly the same inputs.

@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.14)
 project(HFTTrader LANGUAGES CXX)
 
+# Prefer Boost's package config when supported by the installed CMake.
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 # C++20 for std::span (obi_config.hpp / signals.hpp weight views) and the
 # [[likely]]/[[unlikely]] branch hints in predictor.hpp. Both subdirectories set
 # this themselves; it is repeated here so a target added directly to this file

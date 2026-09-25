@@ -16,12 +16,13 @@ Output
 Usage
 -----
     cd "HFT trader"
-    python3 scripts/run_backtest.py
+    python3 scripts/run_backtest.py                 # requires real files in data/raw/
+    python3 scripts/run_backtest.py --synthetic      # explicit synthetic demo
 
 Configuration
 -------------
 Edit the Backtester() constructor call below to tune simulation parameters.
-Place real Tardis.dev CSVs in data/raw/ to switch from synthetic to real data.
+Real-data runs require both Tardis book files in data/raw/. Synthetic mode must be requested explicitly.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from __future__ import annotations
 import sys
 import pathlib
 import logging
+import argparse
 
 import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — works in all environments
@@ -234,6 +236,13 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run CrossFlux backtest")
+    parser.add_argument(
+        "--synthetic", action="store_true",
+        help="run generated demo data explicitly instead of requiring real book files",
+    )
+    args = parser.parse_args()
+
     print("\n" + "═" * 50)
     print("  Cross-Venue Arbitrage Predictor — Phase 9")
     print("═" * 50 + "\n")
@@ -252,7 +261,8 @@ if __name__ == "__main__":
         # ── Real Tardis data (2024-03-01, book_snapshot_5, depth=5) ────────
         binance_path     = pathlib.Path("data/raw/binance_book_snapshot_5_2024-03-01_BTCUSDT.csv.gz"),
         kraken_path      = pathlib.Path("data/raw/kraken_book_snapshot_5_2024-03-01_XBT-USD.csv.gz"),
-        generator_kwargs = {"duration_s": 625, "seed": 42},  # synthetic fallback
+        generator_kwargs = {"duration_s": 625, "seed": 42},
+        use_synthetic   = args.synthetic,
     )
 
 

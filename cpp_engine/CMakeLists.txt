@@ -1,15 +1,19 @@
 cmake_minimum_required(VERSION 3.14)
 project(CrossVenueArbitrage)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 # C++20 is required, not preferred: signals.hpp and obi_config.hpp use std::span
 # for the non-owning weight view, and predictor.hpp uses [[likely]]/[[unlikely]].
 # This was 17 and did not compile -- `std::span has not been declared`.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Manually specify Boost paths since find_package is problematic
-set(BOOST_INCLUDE_DIR /opt/homebrew/opt/boost/include)
-set(BOOST_LIBRARY_DIR /opt/homebrew/opt/boost/lib)
+# Discover Boost from the toolchain/package manager, not a machine-specific path.
+find_package(Boost REQUIRED)
+find_package(Threads REQUIRED)
 
 # Find Python headers and libraries
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
@@ -36,20 +40,17 @@ add_library(arbitrage_engine_lib SHARED
 # Ensure header search paths are included
 target_include_directories(arbitrage_engine_lib PRIVATE
     include
-    ${BOOST_INCLUDE_DIR}
     ${Python3_INCLUDE_DIRS}
     ${NLOHMANN_JSON_INCLUDE_DIR}
-    ${OPENSSL_INCLUDE_DIR}
 )
 
-# Link libraries - manually specify the Boost libraries we need
+# Link imported targets so include and link requirements travel with the targets.
 target_link_libraries(arbitrage_engine_lib PRIVATE
-    ${BOOST_LIBRARY_DIR}/libboost_thread.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_context.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_coroutine.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_fiber.dylib
+    Boost::boost
     nlohmann_json::nlohmann_json
-    ${OPENSSL_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Threads::Threads
     ${Python3_LIBRARIES}
 )
 
@@ -63,33 +64,30 @@ pybind11_add_module(arbitrage_engine
 # Ensure header search paths are included for the Python module too
 target_include_directories(arbitrage_engine PRIVATE
     include
-    ${BOOST_INCLUDE_DIR}
     ${Python3_INCLUDE_DIRS}
     ${NLOHMANN_JSON_INCLUDE_DIR}
-    ${OPENSSL_INCLUDE_DIR}
 )
 
-# Link libraries for the Python module
+# Link imported dependencies for the Python module.
 target_link_libraries(arbitrage_engine PRIVATE
-    ${BOOST_LIBRARY_DIR}/libboost_thread.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_context.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_coroutine.dylib
-    ${BOOST_LIBRARY_DIR}/libboost_fiber.dylib
+    Boost::boost
     nlohmann_json::nlohmann_json
-    ${OPENSSL_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Threads::Threads
     ${Python3_LIBRARIES}
 )
 
 # Install .so next to the Python source for easy import (Python module)
 set_target_properties(arbitrage_engine PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 # Also output the regular shared library to the same location
 set_target_properties(arbitrage_engine_lib PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 # Optimize for speed (-O3).
@@ -106,8 +104,10 @@ set_target_properties(arbitrage_engine_lib PROPERTIES
 # check untestable except through a tolerance. Turning contraction off costs
 # nothing measurable on a 5-iteration loop.
 #
-# Note that -march=native has the same class of problem and is left as-is: a
-# binary built here is not guaranteed to reproduce bit-for-bit on a different
-# microarchitecture. Remove it if that guarantee is ever needed.
-target_compile_options(arbitrage_engine_lib PRIVATE -O3 -march=native -ffp-contract=off)
-target_compile_options(arbitrage_engine PRIVATE -O3 -march=native -ffp-contract=off)
+# Avoid -march=native so binaries remain buildable on other supported CPUs.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(arbitrage_engine_lib PRIVATE -O3 -ffp-contract=off)
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(arbitrage_engine PRIVATE -O3 -ffp-contract=off)
+endif()

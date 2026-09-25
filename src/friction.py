@@ -397,9 +397,17 @@ def _erfinv(y: float) -> float:
     ln1my2 = math.log(1.0 - y * y)
     t1 = 2.0 / (math.pi * a) + ln1my2 / 2.0
     x = math.copysign(math.sqrt(math.sqrt(t1 * t1 - ln1my2 / a) - t1), y)
-    for _ in range(2):
+    # The initial approximation is accurate in the center but loses precision
+    # in the tails, where erf's derivative is small. Iterate to a residual bound
+    # instead of assuming two Newton steps suffice for every p in (0, 1).
+    for _ in range(8):
         err = math.erf(x) - y
-        x -= err / (2.0 / math.sqrt(math.pi) * math.exp(-x * x))
+        if abs(err) <= 2e-16:
+            break
+        derivative = 2.0 / math.sqrt(math.pi) * math.exp(-x * x)
+        if derivative == 0.0:
+            break
+        x -= err / derivative
     return x
 
 

@@ -28,3 +28,15 @@ build/
 .idea/
 .vscode/
 *.DS_Store
+
+# Local native build outputs and temporary compiler artifacts
+*.so
+*.dylib
+*.o
+*.o.tmp
+live_trading_binance_kraken
+
+# Local dashboards and simulation outputs
+.DS_Store
+backtest_results.png
+data/*_log.csv

@@ -8,8 +8,8 @@ Architecture
 Three independent layers:
 
   DataLayer (SyntheticDataGenerator)
-      Generates realistic GBM-driven BTC/USD tick data for two venues.
-      Falls back automatically to real Tardis CSVs when data/raw/ is populated.
+      Generates GBM-driven demo ticks only when synthetic mode is explicitly requested.
+      Otherwise the backtester requires both real venue data files.
       Outputs: List[arbitrage_engine.MarketTick]
 
   BacktestEngine (Backtester)
@@ -1229,6 +1229,7 @@ class Backtester:
         binance_path:      Optional[Path] = None,
         kraken_path:       Optional[Path] = None,
         generator_kwargs:  Optional[dict] = None,
+        use_synthetic:    bool = False,
     ) -> None:
         self.exchange_a        = exchange_a
         self.exchange_b        = exchange_b
@@ -1237,6 +1238,7 @@ class Backtester:
         self.binance_path      = binance_path or self._DEFAULT_BINANCE
         self.kraken_path       = kraken_path  or self._DEFAULT_KRAKEN
         self.generator_kwargs  = generator_kwargs or {}
+        self.use_synthetic    = bool(use_synthetic)
 
         self._aggregator = ae.SignalAggregator(
             exchange_a,
@@ -1284,7 +1286,14 @@ class Backtester:
             states = load_market_states(b_path, k_path, depth=BOOK_DEPTH)
             return states, "real CSV"
 
-        logger.info("No CSV files found — using SyntheticDataGenerator.")
+        if not self.use_synthetic:
+            raise FileNotFoundError(
+                "Real Binance and Kraken book files were not both found. "
+                "Refusing to silently substitute synthetic data; pass "
+                "use_synthetic=True for a demo run."
+            )
+
+        logger.info("Using explicitly requested synthetic GBM data.")
         gen   = SyntheticDataGenerator(**self.generator_kwargs)
         ticks = gen.generate()
         return ticks, "synthetic GBM"
