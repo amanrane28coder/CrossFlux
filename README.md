@@ -4,6 +4,7 @@
 
   <!-- Badges -->
   <p>
+    <a href="https://github.com/amanrane28coder/CrossFlux/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/amanrane28coder/CrossFlux/ci.yml?branch=main&label=CI" alt="CI status" /></a>
     <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg" alt="C++20" />
     <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" alt="Python 3.12+" />
     <img src="https://img.shields.io/badge/Architecture-SPSC%20Lock--Free-orange.svg" alt="Lock-Free Architecture" />
@@ -68,7 +69,29 @@ docker build -t crossflux-research .
 docker run --rm crossflux-research
 ```
 
-The GitHub Actions workflow builds the C++ targets and runs the Python suite. It does not exercise authenticated exchange orders; the C++ dispatcher remains simulated.
+## 🧰 Native Build and CI
+
+The CI workflow runs on Ubuntu 24.04 for pushes and pull requests. It installs the native toolchain and pinned Python dependencies, builds the C++ engine and simulated trading executable, then runs the Python suite against the built extension. Reproduce those steps locally on Ubuntu with:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake python3-dev python3-venv \
+  libboost-all-dev libssl-dev nlohmann-json3-dev
+
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+PYBIND11_CMAKE_DIR="$(.venv/bin/python -m pybind11 --cmakedir)"
+cmake -S . -B build/ci \
+  -DCROSSFLUX_OUTPUT_DIRECTORY="$PWD/build/artifacts" \
+  -DPython3_EXECUTABLE="$PWD/.venv/bin/python" \
+  -Dpybind11_DIR="$PYBIND11_CMAKE_DIR"
+cmake --build build/ci --parallel 2
+
+PYTHONPATH="$PWD/build/artifacts:$PWD" .venv/bin/python -m pytest -q
+```
+
+The CI workflow builds the C++ targets and runs the Python suite. It does not exercise authenticated exchange orders; the C++ dispatcher remains simulated.
 
 The Python market-data simulator can optionally expose Prometheus text metrics at `http://127.0.0.1:9108/metrics` by setting `CROSSFLUX_METRICS_ENABLED=true`. It binds to loopback by default. Metric names distinguish simulated orders/fills and unconverted account-unit PnL from real venue executions or USD PnL.
 
