@@ -25,9 +25,11 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt
       - name: Build C++ engine and simulated trading executable
         run: |
+          PYBIND11_CMAKE_DIR="$($GITHUB_WORKSPACE/.venv/bin/python -m pybind11 --cmakedir)"
           cmake -S . -B build/ci \
             -DCROSSFLUX_OUTPUT_DIRECTORY="$GITHUB_WORKSPACE/build/artifacts" \
-            -DPython3_EXECUTABLE="$GITHUB_WORKSPACE/.venv/bin/python"
+            -DPython3_EXECUTABLE="$GITHUB_WORKSPACE/.venv/bin/python" \
+            -Dpybind11_DIR="$PYBIND11_CMAKE_DIR"
           cmake --build build/ci --parallel 2
       - name: Run Python suite against the built extension
         env:
