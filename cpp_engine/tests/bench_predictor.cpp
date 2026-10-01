@@ -8,8 +8,8 @@
  * -----------
  *  1. PRE-BUILD phase (not timed):
  *       Generate 100,000 MarketTick<10> objects into a std::vector.
- *       Alternate volumes to produce ~50% Gate 1 pass rate, simulating
- *       a realistically mixed live data stream (not all-pass or all-fail).
+ *       Alternate volumes and cross-venue prices to produce ~50% full-pipeline
+ *       pass rate, simulating a mixed stream (not all-pass or all-fail).
  *
  *  2. BENCHMARK phase (timed with std::chrono::steady_clock):
  *       Call aggregator.evaluate(ticks) once.
@@ -55,24 +55,25 @@ namespace {
 
 /// Build a single-level OrderBookSnapshot<10> with controlled bid/ask volumes.
 [[nodiscard]] OrderBookSnapshot<10>
-make_snap(const char* exchange, uint64_t ts, double bid_vol, double ask_vol)
+make_snap(const char* exchange, uint64_t ts, double bid_vol, double ask_vol,
+          double bid_price = 49'999.0, double ask_price = 50'001.0)
 {
     std::array<PriceLevel, 10> bids{};
     std::array<PriceLevel, 10> asks{};
-    bids[0] = PriceLevel{49'999.0, bid_vol};
-    asks[0] = PriceLevel{50'001.0, ask_vol};
+    bids[0] = PriceLevel{bid_price, bid_vol};
+    asks[0] = PriceLevel{ask_price, ask_vol};
     return make_order_book_snapshot<10>(
         ts, exchange, bids, asks, /*bid_depth=*/1, /*ask_depth=*/1);
 }
 
 /**
  * Generate N_TICKS MarketTick<10> objects with an alternating volume pattern
- * designed to yield ~50% Gate 1 pass rate.
+ * designed to yield ~50% full-pipeline pass rate, including Gate 3.
  *
  * Even ticks  (i % 2 == 0):
  *   snap_a: bid=100, ask=1   → OBI_A ≈ +0.98  (bid-heavy)
  *   snap_b: bid=1,   ask=1   → OBI_B =  0.0   (balanced)
- *   delta = +0.98 > 0.3      → Gate 1 PASS
+ *   Kraken ask is ~40 bps below Binance's bid, so Gate 3 passes.
  *
  * Odd ticks (i % 2 == 1):
  *   snap_a: bid=1, ask=1     → OBI_A = 0.0   (balanced)
@@ -93,7 +94,8 @@ build_ticks(std::size_t n_ticks)
         if (i % 2 == 0) {
             // Strongly imbalanced → |delta| ≈ 0.98 → Gate 1 PASS
             tick.snap_a = make_snap("binance", ts, 100.0, 1.0);
-            tick.snap_b = make_snap("kraken",  ts,   1.0, 1.0);
+            tick.snap_b = make_snap("kraken",  ts,   1.0, 1.0,
+                                    49'799.0, 49'801.0);
         } else {
             // Balanced on both sides → delta = 0.0 → Gate 1 FAIL
             tick.snap_a = make_snap("binance", ts, 1.0, 1.0);
@@ -113,7 +115,7 @@ build_ticks(std::size_t n_ticks)
 // Numerical cross-check against Python reference
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void cross_check_p_execute(const SignalAggregator& agg)
+static bool cross_check_p_execute(const SignalAggregator& agg)
 {
     // Python reference: calculate_execution_probability(50.0, 3.5, 0.4)
     // i.e. scipy.stats.lognorm.cdf(50.0, s=0.4, scale=exp(3.5)) = 0.84850850
@@ -125,6 +127,7 @@ static void cross_check_p_execute(const SignalAggregator& agg)
     std::fprintf(stderr, "[CrossCheck] C++ p_execute=%.8f  Python_ref=%.8f  |diff|=%.2e  %s\n",
         cpp_val, python_ref, diff,
         (diff < 1e-6) ? "PASS" : "FAIL");
+    return diff < 1e-6;
 }
 
 
@@ -149,7 +152,7 @@ int main()
     };
 
     // ── Numerical cross-check ─────────────────────────────────────────────
-    cross_check_p_execute(agg);
+    if (!cross_check_p_execute(agg)) return EXIT_FAILURE;
     std::fprintf(stderr, "\n");
 
     // ── Pre-build tick batch (NOT timed) ──────────────────────────────────
@@ -177,6 +180,12 @@ int main()
     std::fprintf(stderr, "Signals emitted   : %zu  (%.1f%% pass rate)\n",
         signals.size(),
         100.0 * static_cast<double>(signals.size()) / static_cast<double>(N_TICKS));
+    if (signals.size() != N_TICKS / 2) {
+        std::fprintf(stderr,
+            "[FAIL] Expected %zu emitted signals from the deterministic fixture.\n",
+            N_TICKS / 2);
+        return EXIT_FAILURE;
+    }
     std::fprintf(stderr, "Total time        : %lld µs\n", (long long)elapsed_us);
     std::fprintf(stderr, "Per-tick latency  : %.1f ns\n", per_tick_ns);
     std::fprintf(stderr, "Throughput        : %.2f million ticks/s\n", throughput_m);

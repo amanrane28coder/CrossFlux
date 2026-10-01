@@ -80,14 +80,14 @@ target_link_libraries(arbitrage_engine PRIVATE
 
 # Install .so next to the Python source for easy import (Python module)
 set_target_properties(arbitrage_engine PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    LIBRARY_OUTPUT_DIRECTORY "${CROSSFLUX_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY "${CROSSFLUX_OUTPUT_DIRECTORY}"
 )
 
 # Also output the regular shared library to the same location
 set_target_properties(arbitrage_engine_lib PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    LIBRARY_OUTPUT_DIRECTORY "${CROSSFLUX_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY "${CROSSFLUX_OUTPUT_DIRECTORY}"
 )
 
 # Optimize for speed (-O3).

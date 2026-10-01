@@ -84,9 +84,10 @@ logger = logging.getLogger(__name__)
 # README's headline return. It survives as the "legacy_flat" preset so that
 # number stays reproducible, but it is not a real schedule.
 DEFAULT_QTY:       float = 0.01       # BTC per trade
-INITIAL_CAPITAL:   float = 100_000.0  # USD
+INITIAL_CAPITAL:   float = 100_000.0  # account units; USD only after quote normalization
 BOOK_DEPTH:        int   = 5          # price levels — matches book_snapshot_5
 N_LEVELS_BINDING:  int   = 10         # arbitrage_engine.OrderBookSnapshot N=10
+MAX_QUOTE_AGE_MS:  int   = 250        # reject signal rows with an older venue book
 
 # Venue identity of the two aligned books. Venue A is Binance, venue B is
 # Kraken throughout this module (see _emit_trade, where obi_delta > 0 buys B and
@@ -115,7 +116,7 @@ class Trade:
         the *signal-time* book (best_ask - best_bid across venues).
       * ``pnl_net`` : actual realized PnL using the book prevailing at
         ``signal + latency_ms``, after walking it for size.
-      * ``adverse_selection_cost`` : expected_edge - realized gross, in USD.
+      * ``adverse_selection_cost`` : expected_edge - realized gross, in modeled quote units.
         Positive means the market moved against us between signal and
         fill; negative means it moved in our favour.
 
@@ -142,16 +143,16 @@ class Trade:
     action:       str    # "BUY_B_SELL_A" or "BUY_A_SELL_B"
     buy_venue:    str
     sell_venue:   str
-    buy_price:    float  # realized VWAP on the buy venue (USD)
-    sell_price:   float  # realized VWAP on the sell venue (USD)
+    buy_price:    float  # realized VWAP on the buy venue's quote currency
+    sell_price:   float  # realized VWAP on the sell venue's quote currency
     qty:          float  # position size *requested* (BTC)
-    fee:          float  # total two-leg taker fee (USD), on what each leg filled
-    pnl_net:      float  # net profit / loss (USD)  — can be negative
+    fee:          float  # modeled two-leg fee, before quote-currency normalization
+    pnl_net:      float  # net modeled quote-unit difference; can be negative
     obi_delta:    float
     p_execute:    float
     # ---- Day-1 additions: look-ahead accounting ----
-    expected_edge_at_signal: float = 0.0   # edge predicted at signal time (USD)
-    adverse_selection_cost:  float = 0.0   # expected_edge - realized_pnl_gross (USD)
+    expected_edge_at_signal: float = 0.0   # edge predicted at signal time, quote units
+    adverse_selection_cost:  float = 0.0   # expected_edge - realized_pnl_gross, quote units
     fill_time_mid_a:         float = 0.0   # mid price on venue A at fill time
     fill_time_mid_b:         float = 0.0   # mid price on venue B at fill time
     signal_time_mid_a:       float = 0.0   # mid price on venue A at signal time
@@ -172,7 +173,7 @@ class Trade:
     buy_filled_qty:  float = 0.0 # BTC the buy leg absorbed from its book
     sell_filled_qty: float = 0.0 # BTC the sell leg absorbed from its book
     residual_qty:  float = 0.0   # |buy - sell| left unhedged, charged legging_cost
-    legging_cost:  float = 0.0   # USD cost of flattening residual_qty
+    legging_cost:  float = 0.0   # modeled quote-unit cost of flattening residual_qty
     fill_ts_ms:    int   = 0     # timestamp of the book the fill executed against
     adverse:       bool  = False # pnl_net < 0 — booked, not discarded
     spread_collapsed: bool = False  # edge was positive at signal, gone by fill
@@ -328,15 +329,12 @@ class _VenueBook:
     def __init__(self, venue: str, frame: pd.DataFrame) -> None:
         if not frame.index.is_monotonic_increasing:
             # prevailing_row is a binary search; an unsorted index makes it return
-            # silently wrong rows rather than fail. This can genuinely happen here:
-            # src/ingestion.py indexes on the exchange-assigned `timestamp`, which
-            # is not guaranteed monotonic in arrival order (the same field choice
-            # flagged at src/ingestion.py:124). Sort rather than trust it.
+            # silently wrong rows rather than fail. Receipt timestamps can also
+            # arrive out of order, so sort rather than trust the capture order.
             inversions = int((np.diff(frame.index.to_numpy(dtype=np.int64)) < 0).sum())
             logger.warning(
-                "%s book index is not monotonic (%d inversions) — sorting. The "
-                "index is the exchange timestamp, which can arrive out of order; "
-                "see src/ingestion.py:124.",
+                "%s book index is not monotonic (%d inversions) — sorting by "
+                "receipt timestamp before as-of lookup.",
                 venue, inversions,
             )
             frame = frame.sort_index(kind="stable")
@@ -387,6 +385,7 @@ def _simulate_fills(
     friction: FrictionModel,
     fees,
     rng: np.random.Generator,
+    max_quote_age_ms: int = MAX_QUOTE_AGE_MS,
 ) -> dict[str, np.ndarray]:
     """Buffer every signal for ``latency_ms``, then fill both legs by VWAP.
 
@@ -415,14 +414,20 @@ def _simulate_fills(
     lat_sell = friction.sample_latency(n, rng)
 
     # Truncate to whole ms, matching the scalar path's int(ts + latency).
-    row_buy = buy_book.rows_at((ts_ms + lat_buy).astype(np.int64))
-    row_sell = sell_book.rows_at((ts_ms + lat_sell).astype(np.int64))
+    buy_at_ms = (ts_ms + lat_buy).astype(np.int64)
+    sell_at_ms = (ts_ms + lat_sell).astype(np.int64)
+    row_buy = buy_book.rows_at(buy_at_ms)
+    row_sell = sell_book.rows_at(sell_at_ms)
 
     # -1 means the order arrived before that venue published anything. Clamp so
     # the gathers stay in bounds, then mask the results out.
-    ok = (row_buy >= 0) & (row_sell >= 0)
-    safe_buy = np.where(ok, row_buy, 0)
-    safe_sell = np.where(ok, row_sell, 0)
+    safe_buy = np.maximum(row_buy, 0)
+    safe_sell = np.maximum(row_sell, 0)
+    fresh_buy = (row_buy >= 0) & ((buy_at_ms - buy_book.index[safe_buy]) <= max_quote_age_ms)
+    fresh_sell = (row_sell >= 0) & ((sell_at_ms - sell_book.index[safe_sell]) <= max_quote_age_ms)
+    ok = fresh_buy & fresh_sell
+    safe_buy = np.where(ok, safe_buy, 0)
+    safe_sell = np.where(ok, safe_sell, 0)
 
     ask_px = buy_book.levels("asks", "price", safe_buy)
     ask_am = buy_book.levels("asks", "amount", safe_buy)
@@ -483,9 +488,9 @@ class BacktestResult:
     """All outputs from a completed backtest run."""
 
     trades:           List[Trade]
-    equity_curve:     pd.Series   # index=timestamp_ms, values=equity (USD)
+    equity_curve:     pd.Series   # index=timestamp_ms, values=modeled account units
     total_return_pct: float        # e.g. +3.45 means +3.45%
-    sharpe_ratio:     float        # annualised, risk-free rate = 0
+    sharpe_ratio:     float        # HAC annualised Sharpe from 1-minute returns
     max_drawdown_pct: float        # magnitude (positive number), e.g. 1.2 means 1.2%
     n_ticks:          int
     n_signals:        int
@@ -559,7 +564,7 @@ class BacktestResult:
         """Decompose PnL by regime attribution (vol, spread, split).
 
         Returns a DataFrame with one row per (regime_vol, regime_spread, split)
-        cell containing: n_trades, win_rate, mean_pnl, total_pnl, sharpe.
+        cell containing: n_trades, win_rate, mean_pnl, total_pnl.
         """
         if not self.filled_trades:
             return pd.DataFrame()
@@ -580,17 +585,13 @@ class BacktestResult:
             n = len(g)
             if n == 0:
                 return pd.Series({"n_trades": 0, "win_rate": 0.0,
-                                  "mean_pnl": 0.0, "total_pnl": 0.0,
-                                  "sharpe": 0.0})
+                                  "mean_pnl": 0.0, "total_pnl": 0.0})
             mean = g.pnl_net.mean()
-            std = g.pnl_net.std(ddof=1) if n > 1 else 0.0
-            sharpe = (mean / std * np.sqrt(len(g))) if std > 0 else 0.0
             return pd.Series({
                 "n_trades": n,
                 "win_rate": (g.pnl_net > 0).mean(),
                 "mean_pnl": mean,
                 "total_pnl": g.pnl_net.sum(),
-                "sharpe": sharpe,
             })
 
         return df.groupby(["regime_vol", "regime_spread", "split"]).apply(_agg).reset_index()
@@ -615,12 +616,12 @@ class BacktestResult:
                 continue
             n = len(sub)
             mean = sub.pnl_net.mean()
-            std = sub.pnl_net.std(ddof=1) if n > 1 else 0.0
-            sharpe = (mean / std * np.sqrt(n)) if std > 0 else 0.0
+            win_rate = float((sub.pnl_net > 0.0).mean())
             as_pct = (sub.as_cost.sum() / max(sub.expected_edge.sum(), 1e-9)) * 100
             out.append(
-                f"  {s.upper():5s}: n={n:>6,}  total=${sub.pnl_net.sum():>+10,.2f}  "
-                f"mean=${mean:>+7.4f}  sharpe={sharpe:>+5.2f}  AS%={as_pct:+5.1f}%"
+                f"  {s.upper():5s}: n={n:>6,}  total={sub.pnl_net.sum():>+10,.2f} units  "
+                f"mean/fill={mean:>+7.4f}  win={win_rate*100:>5.1f}%  "
+                f"AS%={as_pct:+5.1f}%"
             )
         return "\n".join(out)
 
@@ -669,40 +670,41 @@ class BacktestResult:
         n_filled = max(len(filled), 1)
 
         lines = [
-            "=== Phase 9 Backtest Results ===",
+            "=== Combined Phase 9 Backtest Results (train + holdout) ===",
             f"Simulation duration  : {self.sim_duration_s/3600:.1f}h {self.data_source}",
             f"Ticks processed      : {self.n_ticks:,}",
             f"Signals evaluated    : {self.n_signals:,}",
             f"Trades attempted     : {len(self.trades):,}",
             f"Trades filled        : {len(filled):,} (Rejected: {rejected_count:,} — no book at fill time)",
             "─" * 46,
-            f"Initial capital      : ${INITIAL_CAPITAL:,.2f}",
-            f"Final equity         : ${self.equity_curve.iloc[-1]:,.2f}",
+            f"Initial capital      : {INITIAL_CAPITAL:,.2f} account units",
+            f"Final equity         : {self.equity_curve.iloc[-1]:,.2f} account units",
             f"Total Return         : {self.total_return_pct:+.2f}%",
-            f"Annualised Sharpe    : {self.sharpe_ratio:.3f}",
+            f"HAC annualised Sharpe: {self.sharpe_ratio:.3f} (1-minute returns, 60-lag NW)",
             f"Maximum Drawdown     : {self.max_drawdown_pct:.2f}%",
             f"Win Rate             : {self.win_rate*100:.1f}%",
             "─" * 46,
             "Look-Ahead Accounting (Day-1 fix):",
-            f"  Expected edge (signal-time)   : ${expected_total:,.2f}",
-            f"  Realized gross edge (fill-time): ${realized_gross_total:,.2f}",
-            f"  Adverse-selection cost        : ${as_cost_total:,.2f}  ({as_cost_bps:+.1f} bps of expected)",
+            f"  Expected edge (signal-time)   : {expected_total:,.2f} account units",
+            f"  Realized gross edge (fill-time): {realized_gross_total:,.2f} account units",
+            f"  Adverse-selection cost        : {as_cost_total:,.2f} account units ({as_cost_bps:+.1f} bps of expected)",
             f"  Avg two-leg latency           : {avg_latency_ms:.1f} ms",
             "─" * 46,
             f"Execution Friction ({fr.name} preset, {fr.latency_ms:.0f} ms/leg):",
             f"  adverse_selection_fills       : {len(adverse):,} "
-            f"({len(adverse)/n_filled*100:.1f}% of fills), "
-            f"${sum(t.pnl_net for t in adverse):,.2f}",
+                f"({len(adverse)/n_filled*100:.1f}% of fills), "
+                f"{sum(t.pnl_net for t in adverse):,.2f} account units",
             f"    of which spread collapsed   : {len(collapsed):,} "
             f"(gross edge gone before fees)",
             f"  Mean VWAP slippage vs touch   : {mean_slip_bps:.2f} bps",
             f"  Unfilled (book too thin)      : {unfilled_pct:.2f}% of requested qty",
-            f"  Legged fills (qty mismatch)   : {n_legged:,}, unwind cost ${legging_total:,.2f}",
-            f"  Taker fees paid               : ${fee_total:,.2f}",
+            f"  Legged fills (qty mismatch)   : {n_legged:,}, unwind cost {legging_total:,.2f} account units",
+            f"  Taker fees paid               : {fee_total:,.2f} modeled quote units",
+            self.split_summary(),
         ]
         if worst is not None:
             lines.append(
-                f"  Worst single fill             : ${worst.pnl_net:,.2f} "
+                f"  Worst single fill             : {worst.pnl_net:,.2f} account units "
                 f"({worst.action} @ {worst.timestamp_ms})"
             )
         if fr.latency_ms == 0.0:
@@ -961,7 +963,7 @@ def _load_real_ticks(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_equity_curve(trades: List[Trade]) -> pd.Series:
-    """Build a pd.Series of equity values (USD) indexed by timestamp_ms.
+    """Build a pd.Series of modeled account units indexed by timestamp_ms.
 
     Ordered by *fill* time, not signal time. PnL is realised when the slower leg
     lands, and with per-leg latency jitter that is not the same ordering as the
@@ -989,35 +991,55 @@ def _total_return(equity_curve: pd.Series) -> float:
     return (final - initial) / initial * 100.0
 
 
-def _annualised_sharpe(trades: List[Trade], sim_duration_s: float) -> float:
-    """
-    Annualised Sharpe Ratio (risk-free rate = 0).
+def _annualised_sharpe(
+    trades: List[Trade], sim_duration_s: float,
+    interval_seconds: int = 60, max_lags: int = 60,
+) -> float:
+    """Estimate HAC-adjusted annualised Sharpe from fixed-interval returns.
 
-    Annualisation method: time-elapsed scaling.
-        factor = sqrt(SECONDS_PER_YEAR / sim_duration_s)
-
-    Using time-elapsed rather than trade-count scaling avoids the Sharpe
-    exploding when sim_duration_s is short (e.g. 625s) but trade frequency
-    is high — trade-count annualisation would imply ~118M trades/year and
-    multiply by sqrt(118M) ≈ 10,900, producing nonsensical values.
+    Fills are not independent observations: many signals can share the same
+    minute and market move. Aggregate PnL into one-minute buckets, include
+    zero-trade minutes between the first and last observation, and estimate the
+    long-run variance with a Bartlett-weighted Newey-West estimator. This still
+    requires longer, distinct-date holdouts before it can support a performance
+    claim.
     """
-    if len(trades) < 2 or sim_duration_s <= 0.0:
+    if len(trades) < 2 or sim_duration_s <= 0.0 or interval_seconds <= 0 or max_lags < 0:
         return 0.0
 
-    pnl_series  = np.array([t.pnl_net for t in trades], dtype=float)
-    # Running equity for denominator (pre-trade equity at each step)
-    equity_pre  = INITIAL_CAPITAL + np.concatenate([[0.0], np.cumsum(pnl_series[:-1])])
-    pct_returns = pnl_series / np.maximum(equity_pre, 1.0)
-
-    mean_r = float(np.mean(pct_returns))
-    std_r  = float(np.std(pct_returns, ddof=1))
-
-    if std_r < 1e-12:
+    timestamps = np.asarray(
+        [int(t.fill_ts_ms or t.timestamp_ms) for t in trades], dtype=np.int64
+    )
+    pnls = np.asarray([float(t.pnl_net) for t in trades], dtype=float)
+    if not np.isfinite(pnls).all():
         return 0.0
 
-    # Time-based annualisation: scale by how many sim-durations fit in one year
-    ann_factor = np.sqrt(SECONDS_PER_YEAR / sim_duration_s)
-    return float(mean_r / std_r * ann_factor)
+    interval_ms = interval_seconds * 1000
+    start_ms = int(timestamps.min())
+    bucket = (timestamps - start_ms) // interval_ms
+    bucket_pnl = np.bincount(bucket, weights=pnls)
+    if len(bucket_pnl) < 2:
+        return 0.0
+
+    equity_before = INITIAL_CAPITAL + np.concatenate(
+        ([0.0], np.cumsum(bucket_pnl[:-1]))
+    )
+    returns = bucket_pnl / np.maximum(equity_before, 1.0)
+    mean_return = float(returns.mean())
+    centered = returns - mean_return
+    n = len(returns)
+    lags = min(max_lags, n - 1)
+    long_run_variance = float(np.dot(centered, centered) / n)
+    for lag in range(1, lags + 1):
+        covariance = float(np.dot(centered[lag:], centered[:-lag]) / n)
+        weight = 1.0 - lag / (lags + 1.0)
+        long_run_variance += 2.0 * weight * covariance
+
+    if not np.isfinite(long_run_variance) or long_run_variance <= 1e-24:
+        return 0.0
+
+    periods_per_year = (365.25 * 24 * 60) / interval_seconds
+    return float(mean_return / np.sqrt(long_run_variance) * np.sqrt(periods_per_year))
 
 
 def _max_drawdown(equity_curve: pd.Series) -> float:
@@ -1200,6 +1222,7 @@ class Backtester:
     min_p_execute     : float — Gate 2 minimum p_execute (default 0.80)
     qty               : float — BTC per trade (default 0.01)
     batch_size        : int   — ticks per evaluate() call (default 5000)
+    max_quote_age_ms  : int   — maximum acceptable age per venue book
     friction          : str | FrictionModel — execution friction preset. Decides
                         how long the fill is delayed and what an unhedged
                         residual costs. Defaults to the active preset
@@ -1230,11 +1253,15 @@ class Backtester:
         kraken_path:       Optional[Path] = None,
         generator_kwargs:  Optional[dict] = None,
         use_synthetic:    bool = False,
+        max_quote_age_ms:  int = MAX_QUOTE_AGE_MS,
     ) -> None:
+        if max_quote_age_ms <= 0:
+            raise ValueError("max_quote_age_ms must be > 0")
         self.exchange_a        = exchange_a
         self.exchange_b        = exchange_b
         self.qty               = qty
         self.batch_size        = batch_size
+        self.max_quote_age_ms  = int(max_quote_age_ms)
         self.binance_path      = binance_path or self._DEFAULT_BINANCE
         self.kraken_path       = kraken_path  or self._DEFAULT_KRAKEN
         self.generator_kwargs  = generator_kwargs or {}
@@ -1300,16 +1327,18 @@ class Backtester:
 
     def _run_real_data_vectorized(
         self,
-        train_frac: float = 1.0,
+        train_frac: float = 0.8,
     ) -> BacktestResult:
         """
         Ultra-fast vectorised path for real market L2 data using pandas directly.
         Bypasses building millions of python objects, running in ~5 seconds total.
 
-        Day-2 fix: when ``train_frac < 1.0``, evaluate only the first fraction of
-        aligned ticks (in-sample).  The out-of-sample evaluation is the caller's
-        responsibility — see ``run()``.
+        Uses the first ``train_frac`` of the timestamp range as training data
+        and labels the remaining trades as a chronological holdout. Both periods
+        are simulated so the result can report the holdout separately.
         """
+        if not 0.0 < train_frac < 1.0:
+            raise ValueError("train_frac must be strictly between 0 and 1")
         from src.ingestion import parse_tardis_csv
 
         b_path = Path(self.binance_path)
@@ -1323,6 +1352,7 @@ class Backtester:
         ts_min = min(df_a.index.min(), df_b.index.min())
         ts_max = max(df_a.index.max(), df_b.index.max())
         sim_duration_s = (ts_max - ts_min) / 1000.0
+        cutoff_ms = int(ts_min + (ts_max - ts_min) * train_frac)
 
         logger.info("Computing OBI vectors...")
         bid_cols = [f"bids[{i}].amount" for i in range(BOOK_DEPTH)]
@@ -1354,13 +1384,6 @@ class Backtester:
         df_b["spread_bps"] = np.where(df_b["mid"] > 0,
                                       (df_b["best_ask"] - df_b["best_bid"]) / df_b["mid"] * 1e4, 0.0)
 
-        # Day-2: train/test split on the aligned timeline
-        if train_frac < 1.0:
-            cutoff_ms = int(ts_min + (ts_max - ts_min) * train_frac)
-            df_a = df_a[df_a.index <= cutoff_ms]
-            df_b = df_b[df_b.index <= cutoff_ms]
-            logger.info("Day-2: in-sample window only, cutoff=%d ms", cutoff_ms)
-
         logger.info("Aligning venues via As-Of outer join...")
         df_a_sub = df_a[["obi", "best_bid", "best_ask", "mid", "spread_bps"]].rename(columns=lambda x: x + "_a")
         df_b_sub = df_b[["obi", "best_bid", "best_ask", "mid", "spread_bps"]].rename(columns=lambda x: x + "_b")
@@ -1368,7 +1391,21 @@ class Backtester:
         df_a_sub = df_a_sub.groupby(level=0).last()
         df_b_sub = df_b_sub.groupby(level=0).last()
 
+        # Retain each venue's actual quote time through the as-of fill. The
+        # union+ffill alignment is valid only while both books remain fresh.
+        df_a_sub["quote_ts_a"] = df_a_sub.index
+        df_b_sub["quote_ts_b"] = df_b_sub.index
+
         aligned = pd.concat([df_a_sub, df_b_sub], axis=1).sort_index().ffill().dropna()
+        age_a = aligned.index.to_numpy(dtype=np.int64) - aligned["quote_ts_a"].to_numpy(dtype=np.int64)
+        age_b = aligned.index.to_numpy(dtype=np.int64) - aligned["quote_ts_b"].to_numpy(dtype=np.int64)
+        fresh = (age_a <= self.max_quote_age_ms) & (age_b <= self.max_quote_age_ms)
+        stale_count = int((~fresh).sum())
+        aligned = aligned.loc[fresh].drop(columns=["quote_ts_a", "quote_ts_b"])
+        logger.info(
+            "Dropped %d aligned rows with a quote older than %d ms",
+            stale_count, self.max_quote_age_ms,
+        )
         n_ticks = len(aligned)
 
         # Realised volatility regime: rolling 1h std of mid returns
@@ -1492,6 +1529,7 @@ class Backtester:
                 sub = _simulate_fills(
                     buy_bk, sell_bk, ts_arr[mask], self.qty,
                     self.friction, fees, rng,
+                    max_quote_age_ms=self.max_quote_age_ms,
                 )
                 for key, values in sub.items():
                     fills[key][mask] = values
@@ -1588,10 +1626,16 @@ class Backtester:
                 matched    = float(fills["matched"][idx])
                 buy_filled = float(fills["buy_filled"][idx])
                 sell_filled = float(fills["sell_filled"][idx])
+                fill_ts_ms = int(fills["fill_ts"][idx])
                 residual   = float(fills["residual"][idx])
                 fee        = float(fills["fee"][idx])
                 legging    = float(fills["legging"][idx])
                 pnl_net    = float(fills["pnl_net"][idx])
+
+                # Purge training signals whose simulated execution crosses the
+                # holdout boundary; their fill would otherwise inspect test data.
+                if split_label == "train" and fill_ts_ms > cutoff_ms:
+                    continue
 
                 if buy_venue == VENUE_A:
                     fill_mid_a = float(fills["fill_mid_buy"][idx])
@@ -1641,7 +1685,7 @@ class Backtester:
                     sell_filled_qty  = sell_filled,
                     residual_qty     = residual,
                     legging_cost     = legging,
-                    fill_ts_ms       = int(fills["fill_ts"][idx]),
+                    fill_ts_ms       = fill_ts_ms,
                     adverse          = pnl_net < 0.0,
                     spread_collapsed = spread_collapsed,
                     regime_vol    = regime_vol,
@@ -1686,7 +1730,7 @@ class Backtester:
         k_path = Path(self.kraken_path) if self.kraken_path else None
 
         if b_path and k_path and b_path.exists() and k_path.exists():
-            return self._run_real_data_vectorized()
+            return self._run_real_data_vectorized(train_frac=0.8)
 
         # ── Synthetic data: C++ evaluate() batch loop ──────────────────────
         ticks, data_source = self._load_ticks()

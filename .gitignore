@@ -8,6 +8,10 @@ __pycache__/
 venv/
 env/
 
+# Local environment values; keep only the non-secret example in version control.
+.env
+!.env.example
+
 # Raw tick data — never commit large data files
 data/raw/*.csv
 data/raw/*.gz

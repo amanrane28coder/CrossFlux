@@ -121,7 +121,18 @@ def parse_tardis_csv(
             f"Available columns: {list(raw.columns)}"
         )
 
-    timestamp_ms: pd.Series = (raw[TARDIS_TIMESTAMP_COL] // 1000).astype(np.int64)
+    # Historical decisions can only use a quote after it was received. Prefer
+    # local_timestamp (Tardis receipt time) to the exchange event timestamp;
+    # retain the exchange timestamp fallback for older captures, with a warning.
+    time_col = TARDIS_LOCAL_TIMESTAMP_COL
+    if time_col not in raw.columns:
+        logger.warning(
+            "%s has no %s column; falling back to exchange event time (%s). "
+            "This data may contain look-ahead.",
+            filepath.name, TARDIS_LOCAL_TIMESTAMP_COL, TARDIS_TIMESTAMP_COL,
+        )
+        time_col = TARDIS_TIMESTAMP_COL
+    timestamp_ms: pd.Series = (raw[time_col] // 1000).astype(np.int64)
 
     # -----------------------------------------------------------------------
     # Select bid/ask columns up to requested depth

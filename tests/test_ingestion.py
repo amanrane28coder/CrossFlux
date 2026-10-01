@@ -85,7 +85,9 @@ def _make_tardis_csv(n_rows: int = 5, depth: int = 3) -> str:
 
     for row_idx in range(n_rows):
         ts_us = base_ts_us + row_idx * 1_000_000  # +1 second per row
-        local_ts_us = ts_us + 500
+        # Receipt time is deliberately later than exchange time so the parser
+        # regression catches accidental event-time indexing.
+        local_ts_us = ts_us + 63_000
         values = [str(ts_us), str(local_ts_us)]
         for i in range(depth):
             values += [str(base_ask + i * 1.0 + row_idx * 0.1), "1.0"]
@@ -282,9 +284,9 @@ def test_parse_tardis_csv_columns(tmp_path: pytest.TempPathFactory) -> None:
     # Index must be named timestamp_ms
     assert df.index.name == "timestamp_ms", f"Expected 'timestamp_ms', got '{df.index.name}'"
 
-    # Timestamps must be in milliseconds (µs // 1000)
+    # Index uses receipt time (local_timestamp), in milliseconds.
     base_ts_us = 1_700_000_000_000_000
-    expected_first_ts_ms = base_ts_us // 1000
+    expected_first_ts_ms = (base_ts_us + 63_000) // 1000
     assert df.index[0] == expected_first_ts_ms, (
         f"Expected first ts_ms={expected_first_ts_ms}, got {df.index[0]}"
     )
@@ -302,6 +304,18 @@ def test_parse_tardis_csv_columns(tmp_path: pytest.TempPathFactory) -> None:
 
     # Row count must match
     assert len(df) == 5
+
+
+def test_parse_tardis_csv_falls_back_when_local_timestamp_missing(tmp_path) -> None:
+    rows = [line.split(",") for line in _make_tardis_csv(n_rows=2, depth=3).splitlines()]
+    for row in rows:
+        row.pop(1)  # remove local_timestamp from header and data
+    csv_file = tmp_path / "event_time_only.csv"
+    csv_file.write_text("\n".join(",".join(row) for row in rows))
+
+    df = parse_tardis_csv(csv_file, exchange_id="binance", depth=3)
+
+    assert df.index[0] == 1_700_000_000_000
 
 
 # ===========================================================================

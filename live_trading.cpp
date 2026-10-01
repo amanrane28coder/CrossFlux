@@ -1,12 +1,15 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cerrno>
 #include <cstdint>
 #include <csignal>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 #include "cpp_engine/include/fee_config.hpp"
@@ -21,6 +24,20 @@
 #include "cpp_engine/include/websocket_client.hpp"
 
 namespace crossflux {
+
+static double required_positive_env(const char* name) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') {
+        throw std::runtime_error(std::string("required risk setting is missing: ") + name);
+    }
+    errno = 0;
+    char* end = nullptr;
+    const double value = std::strtod(raw, &end);
+    if (errno != 0 || end == raw || *end != '\0' || !std::isfinite(value) || value <= 0.0) {
+        throw std::runtime_error(std::string("risk setting must be a finite positive number: ") + name);
+    }
+    return value;
+}
 
 // Helper function for atomic addition to double
 static void atomic_add(std::atomic<double>& atom, double val) noexcept {
@@ -244,10 +261,28 @@ int main(int argc, char* argv[]) {
     const double slippage_bps = 0.3;
 
     try {
+        // Fail closed if account capital or the drawdown limit is not configured.
+        // The percentage is converted to the CircuitBreaker's absolute loss limit.
+        // PnL and capital must be denominated in the same normalized quote currency.
+        const double initial_capital = crossflux::required_positive_env(
+            "CROSSFLUX_INITIAL_CAPITAL");
+        const double max_drawdown_pct = crossflux::required_positive_env(
+            "CROSSFLUX_MAX_DRAWDOWN_PCT");
+        if (max_drawdown_pct > 100.0) {
+            throw std::runtime_error("CROSSFLUX_MAX_DRAWDOWN_PCT must be <= 100");
+        }
+        const double max_daily_loss = -initial_capital * max_drawdown_pct / 100.0;
+        if (!std::isfinite(max_daily_loss) || max_daily_loss >= 0.0) {
+            throw std::runtime_error("configured capital/drawdown produce an invalid loss limit");
+        }
+
         // ─── Crypto Pipeline (existing) ────────────────────────────────
         // CircuitBreaker expects a negative cumulative-loss threshold.
         auto risk_mgr = std::make_shared<crossflux::CircuitBreaker>(
-            -5.0, 1000, 5);
+            max_daily_loss, 3, 5);
+        std::cout << "[Risk] simulated account capital=" << initial_capital
+                  << " | max drawdown=" << max_drawdown_pct
+                  << "% | loss trip=" << max_daily_loss << '\n';
 
         // Use our custom adaptive dispatcher instead of the standard one
         auto dispatcher = std::make_shared<crossflux::AdaptiveOrderDispatcher>(
@@ -409,4 +444,3 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 }
-

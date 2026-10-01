@@ -3,7 +3,53 @@
 **Date:** 2026-08-21
 **Scope:** Python test suite, C++ engine tests, C++ benchmark, and the backtester that produces the README's headline numbers.
 
-> **Status update (same day, after the fee / weighted-OBI / friction work).**
+**Current-tree verification (2026-10-01):** `pytest -q` passed **168 tests**.
+The C++ signal suite passed **56 / 56**, the friction suite passed **251 / 251
+checks**, the benchmark produced the expected **50,000 signals from
+100,000 ticks**, and the C++/Python parity check matched **3,756 OBI values**
+and **8,220 book-walk values** bit-for-bit with FMA contraction disabled.
+These checks validate code behavior, not strategy profitability or live-exchange
+readiness. The real-data runner now labels an 80/20 chronological split, drops
+quotes older than 250 ms by default (configurable), parses `local_timestamp`
+when available, the C++ benchmark fixture has a cross-venue price gap, and the
+Python kill switch uses configured initial capital. Fee schedules are
+centralized and partial/adverse fills are charged in the current simulation
+path. The USDT/USD basis and independent predictive value of OBI remain
+unresolved. Historical findings below describe the audited revision, not the
+current source unless explicitly noted. A follow-up audit corrected the
+Sharpe estimator to use one-minute portfolio returns and a 60-lag Newey-West
+variance estimate, removed fill-level t-statistics, and added three regression
+tests; the current Python suite now passes **168 tests**. The real-data rerun
+still reports mixed-quote dollar metrics because the local archive has no
+historical USDT/USD conversion book; treat those figures as diagnostic only.
+
+**Follow-up research (2026-10-01):** `python3 -m
+backtest.currency_sensitivity --rates 0.995 0.999 0.9995 1.0 1.0005 1.001
+1.005` decomposed modeled USD and USDT cash flows and reconciled at 1.0 to the
+existing ledger. Conditional on the original signals and a constant conversion
+rate, break-even was **1.00042696 USD/USDT** for the full day, **1.00024690** in
+training, and **1.00065306** in holdout. At 1.0005 the full-day translated PnL
+was **-$6,253.50**; at 1.001 the holdout was **-$13,169.67**. These are scenario
+calculations, not observed FX rates; they do not re-run entry selection and do
+not model the FX book, inventory, or conversion costs. They demonstrate that a
+few basis points of quote-currency premium can reverse the reported edge.
+
+The corrected run reports **7.176 HAC annualised Sharpe** from one-minute
+returns (60-lag Newey-West), down from 22.365 using the old per-fill scaling.
+The result is still not validated: it is a single day, the two quote currencies
+remain unconverted, and the holdout reports 100% positive fills. The strategy's
+profitability should not be inferred from this sample.
+
+The C++ live-market-data executable now requires finite positive
+`CROSSFLUX_INITIAL_CAPITAL` and `CROSSFLUX_MAX_DRAWDOWN_PCT` (at most 100), derives
+its simulated loss trip from them, and rejects missing or invalid settings
+before connecting. An out-of-tree CMake build completed and startup checks
+confirmed failure on missing capital and `nan` drawdown. This is a startup risk
+guard for the simulator; there is still no real order adapter. CMake now accepts
+`CROSSFLUX_OUTPUT_DIRECTORY` for build artifacts; the default remains the repo
+root for compatibility.
+
+> **Historical status update (same day, after the fee / weighted-OBI / friction work).**
 > §1 has been rewritten to the current state: the suite is green and has grown
 > from 74 to 134 tests. §2.1 has been **rewritten** — the entry-gate tautology is
 > broken and the section now carries the post-fix numbers, including a capacity
@@ -278,7 +324,7 @@ It read only the first 400,000 rows of each file, which truncates binance at
 snapshot across the final 45% of its sample. Every fill in that tail priced
 against a stale book.
 
-### 2.2 A single fee constant flips the sign of the return
+### 2.2 Historical fee mismatch (centralized in current source)
 
 `engine.py:69` uses a flat 5 bps/leg (10 bps round-trip). But
 `src/execution_simulator.py:7-9` **and** `cpp_engine/src/execution_manager.cpp:21-26`
@@ -319,7 +365,7 @@ is confirming a correlation the harness imposes.
 
 ---
 
-## 3. The benchmark measures the wrong path
+## 3. Historical benchmark finding (fixture corrected in current source)
 
 `cpp_engine/tests/bench_predictor.cpp:11-12` promises "~50% Gate 1 pass rate".
 As committed it reports:
@@ -352,46 +398,56 @@ it isn't timing full evaluation.) Fix is one line in the fixture.
 
 ## 4. Other real bugs
 
-**Failed trades are free, and invisible.** The rejection path (`:993-1021`)
-appends the trade with `fee = 0.0`, `pnl_net = 0.0`, `status = "rejected"`.
+**Historical partial-fill accounting defect (corrected in current simulator).**
+The audited rejection path (`:993-1021`) appended the trade with `fee = 0.0`,
+`pnl_net = 0.0`, `status = "rejected"`.
 `win_rate` (`:251-257`) only counts `filled_trades`, so latency-destroyed trades
-leave the denominator entirely; `_compute_equity_curve` (`:620-632`) sums all
-trades but they contribute exactly 0.0. A trade where one leg filled and the
-other did not leaves a real unhedged position — **legging risk is modeled as
-costless**.
+left the denominator entirely; `_compute_equity_curve` (`:620-632`) summed all
+trades but they contributed exactly 0.0. A trade where one leg filled and the
+other did not leaves a real unhedged position. The current simulator books
+partial-leg fees and prices the residual legging cost; the old figures above do
+not reflect that correction.
 
-**The advertised out-of-sample split never executes.**
+**Historical out-of-sample split defect (corrected in current source).**
 `_run_real_data_vectorized` defaults `train_frac = 1.0` (`:832`) and `run()`
 calls it with no argument (`:1099`). No caller anywhere passes `train_frac`, so
-the label at `:974` is always `"train"` and `split_summary()` always prints
-`TEST : (no trades)`. The docstring at `:838-840` defers OOS validation to
+the label at `:974` was always `"train"` and `split_summary()` printed
+`TEST : (no trades)`. The docstring at `:838-840` deferred OOS validation to
 "the caller's responsibility — see `run()`", which never does it.
 
-**Adverse-selection accounting is biased the wrong way.** `:202-205` rejects a
+**Historical adverse-selection accounting defect (corrected in current simulator).**
+The audited `:202-205` path rejected a
 fill only when price moved *against* us past tolerance; favorable moves are
 always accepted. Conditioning on `status == "filled"` truncates only the adverse
-tail, so the reported cost is **−$142.51 (−53.9 bps)** — i.e. the market
+tail, so the reported cost was **−$142.51 (−53.9 bps)** — i.e. the market
 supposedly moved *in our favour* on average across 31,501 arbitrage fills. This
-contradicts the module's own docstring at `:99-100` ("should expect
-adverse_selection_cost > 0 in aggregate") yet `summary()` prints it as validated.
+contradicted the module's own docstring at `:99-100` ("should expect
+adverse_selection_cost > 0 in aggregate"). Those measurements are from the old
+filtering path and are not reproduced by the current booked-fill path.
 
-**`GlobalKillSwitch` trips on the first loss.** `src/risk_manager.py:87-106`
-measures drawdown against peak *PnL*, not capital. Verified: a single −$0.01
-first trade gives `dd = 100.0%, tripped = True`; `+$1.00` then `−$0.10` gives
-`dd = 10.0%, tripped = True` while cumulative PnL is still **+$0.90**. A 5% kill
-switch halts the system almost immediately.
+**Historical `GlobalKillSwitch` defect (corrected in current source).** The
+audited implementation measured drawdown against peak *PnL*, not capital, and
+could trip on the first loss. The current Python implementation measures equity
+drawdown against configured initial capital and requires
+`CROSSFLUX_INITIAL_CAPITAL`.
 
-**Look-ahead in the data alignment.** `src/ingestion.py:124` keys off the Tardis
-`timestamp` (exchange clock) rather than `local_timestamp` (receipt). In row 1 of
-the Kraken file these differ by 63 ms, so signals can be acted on before the
-data was receivable. Compounding it, the `ffill` as-of join (`engine.py:900`)
-leaves quotes stale — Kraken staleness p90 = 251 ms, p99 = 1,387 ms, max
-9,988 ms — so many "cross-venue margins" never existed simultaneously.
+**Historical look-ahead in data alignment (corrected in current source).** The
+audited `src/ingestion.py:124` path used Tardis `timestamp` (exchange clock)
+rather than `local_timestamp` (receipt). In row 1 of the Kraken file these
+differ by 63 ms, so signals could be acted on before the data was receivable.
+The `ffill` as-of join also left quotes stale — Kraken staleness p90 = 251 ms,
+p99 = 1,387 ms, max 9,988 ms. Current backtests use receipt timestamps and reject
+quotes older than 250 ms at signal and simulated fill time.
 
-**Two different quantities both reported as "Sharpe."** `_annualised_sharpe`
+**Historical Sharpe-label defect (follow-up correction).**
+`_annualised_sharpe`
 (`:642-670`) does proper time-based scaling → 30.69. But `split_summary`
 (`:320`) and `regime_decomposition` (`:288`) compute `mean/std*sqrt(n_trades)`,
-a t-statistic → prints **+285.45** in the same report.
+a t-statistic → printed **+285.45** in the same report. A later audit removed
+these fill-level significance figures entirely; dependent fills must not be
+treated as independent observations. The current Sharpe uses one-minute returns
+and a Newey-West serial-correlation adjustment, but still needs longer
+out-of-sample data to support inference.
 
 **Incorrect docstring values in `src/latency_model.py`.** The worked examples
 claim `(50.0, 3.5, 0.3) → 0.9297` and `(50.0, 3.5, 2.0) → 0.5791`; actual values
@@ -418,10 +474,10 @@ download that never completed.
    backtester. Latency buffer, VWAP book walk and booked adverse fills are in
    `src/friction.py` + `backtest/engine.py`, covered by 19 tests and verified
    bit-exact against an independent reimplementation. The result is a real
-   capacity curve peaking at 3.0 BTC. Still open: the same two mechanisms in the
-   C++ path (`cpp_engine/include/friction.hpp` has the book walk; the pending
-   queue and the wiring into `execution_manager.hpp` are not written), plus the
-   C++/Python parity check its docstring already promises.
+   capacity curve peaking at 3.0 BTC. The C++ path now has a pending queue and
+   wiring in `cpp_engine/include/execution_manager.hpp`; current open work is a
+   complete C++/Python execution parity check and reproducible live-path
+   validation.
 3. **Fix the quote mismatch** — use BTCUSDT on both venues, or explicitly hedge
    and report the USDT/USD basis as a separate P&L line. **This is now the
    highest-value open item**, because §2.1 no longer hides it: with the tautology
@@ -433,10 +489,12 @@ download that never completed.
    at their loss instead of `pnl_net = 0.0`, and a partially filled pair charges
    the unhedged residual at the preset's legging cost while paying fees on what
    each leg actually filled.
-5. **Make `run()` actually pass `train_frac < 1.0`** so the OOS split runs.
+5. ~~**Make `run()` actually pass `train_frac < 1.0`**~~ — current source uses an
+   80/20 chronological holdout and purges training fills that cross the boundary.
 6. ~~**Repair the 3 stale tests**~~ — **done**, see §1.
-7. **Fix the benchmark fixture** so it times the path it claims to.
-8. **Fix `GlobalKillSwitch`** to measure drawdown against capital.
+7. ~~**Fix the benchmark fixture**~~ — Kraken now has a distinct price gap so
+   the benchmark can emit signals through Gate 3.
+8. ~~**Fix `GlobalKillSwitch`**~~ — current Python guard uses configured capital.
 9. **Get the five-level ceiling out of the way** — the 91 MB L2 incremental feed
    is the shared blocker for both a real slippage curve above 0.25 BTC and true
    multi-level OFI.

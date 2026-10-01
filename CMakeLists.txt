@@ -13,6 +13,11 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Keep the historical root-level artifact location by default, while allowing
+# hermetic/out-of-tree builds to direct all generated binaries elsewhere.
+set(CROSSFLUX_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+    "Directory for generated executable, extension module, and shared libraries")
+
 # Add subdirectories
 add_subdirectory(cpp_engine)
 add_subdirectory(live_trading)

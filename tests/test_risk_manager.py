@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import pytest
 
 from src.risk_manager import (
     GlobalKillSwitch,
@@ -34,7 +35,7 @@ def test_cooldown_guard() -> None:
 
 
 def test_kill_switch_basic() -> None:
-    ks = GlobalKillSwitch(max_drawdown_pct=10.0)
+    ks = GlobalKillSwitch(initial_capital=100.0, max_drawdown_pct=10.0)
     assert not ks.is_tripped()
     assert ks.drawdown_pct() == 0.0
     ks.record_trade(100.0)
@@ -44,12 +45,12 @@ def test_kill_switch_basic() -> None:
     ks.record_trade(-90.0)
     assert ks.cumulative_pnl == 10.0
     assert ks.peak_pnl == 100.0
-    assert ks.drawdown_pct() == 90.0
+    assert ks.drawdown_pct() == 45.0
     assert ks.is_tripped()
 
 
 def test_kill_switch_reset() -> None:
-    ks = GlobalKillSwitch(max_drawdown_pct=5.0)
+    ks = GlobalKillSwitch(initial_capital=100.0, max_drawdown_pct=5.0)
     ks.record_trade(50.0)
     ks.record_trade(-60.0)
     assert ks.is_tripped()
@@ -60,14 +61,22 @@ def test_kill_switch_reset() -> None:
 
 
 def test_kill_switch_zero_peak() -> None:
-    ks = GlobalKillSwitch(max_drawdown_pct=10.0)
+    ks = GlobalKillSwitch(initial_capital=100.0, max_drawdown_pct=10.0)
     assert ks.drawdown_pct() == 0.0
-    ks.record_trade(-5.0)
-    assert ks.drawdown_pct() > 0.0
+    ks.record_trade(-0.01)
+    assert ks.drawdown_pct() == pytest.approx(0.01)
+    assert not ks.is_tripped()
+
+
+def test_risk_manager_fails_closed_without_capital(monkeypatch) -> None:
+    monkeypatch.delenv("CROSSFLUX_INITIAL_CAPITAL", raising=False)
+    with pytest.raises(ValueError, match="CROSSFLUX_INITIAL_CAPITAL"):
+        RiskManager()
 
 
 def test_risk_manager_full_flow() -> None:
-    rm = RiskManager(max_trade_qty=0.01, cooldown_us=200_000, max_drawdown_pct=50.0)
+    rm = RiskManager(max_trade_qty=0.01, cooldown_us=200_000,
+                     max_drawdown_pct=40.0, initial_capital=100.0)
     r = rm.check_order(0.005)
     assert r.approved
     assert r.guard == ""
@@ -87,7 +96,7 @@ def test_risk_manager_full_flow() -> None:
 
 
 def test_risk_manager_exceed_position() -> None:
-    rm = RiskManager(max_trade_qty=0.01)
+    rm = RiskManager(max_trade_qty=0.01, initial_capital=100.0)
     r = rm.check_order(0.02)
     assert not r.approved
     assert "exceeds" in r.reason
@@ -95,7 +104,7 @@ def test_risk_manager_exceed_position() -> None:
 
 
 def test_risk_manager_reset() -> None:
-    rm = RiskManager(max_drawdown_pct=10.0)
+    rm = RiskManager(max_drawdown_pct=10.0, initial_capital=100.0)
     rm.record_trade(50.0)
     rm.record_trade(-100.0)
     assert rm.is_kill_switched()

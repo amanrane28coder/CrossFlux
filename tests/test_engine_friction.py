@@ -185,6 +185,21 @@ def test_no_book_on_one_venue_is_the_only_rejection_left() -> None:
     assert out["pnl_net"][0] == 0.0
 
 
+def test_stale_quote_at_fill_time_is_rejected() -> None:
+    """A quote older than the backtest freshness limit cannot be a fill."""
+    frame = make_frame({1000: FLAT})
+    out = sim(frame, frame, [1000], qty=1.0, latency_ms=251.0)
+    assert not out["ok"][0]
+    assert out["pnl_net"][0] == 0.0
+
+
+def test_quote_freshness_limit_is_configurable_on_backtester() -> None:
+    bt = Backtester(max_quote_age_ms=500)
+    assert bt.max_quote_age_ms == 500
+    with np.testing.assert_raises(ValueError):
+        Backtester(max_quote_age_ms=0)
+
+
 def test_empty_fills_covers_every_field_simulate_returns() -> None:
     """Scatter-back would silently drop a field added to one and not the other."""
     frame = make_frame({1000: FLAT})
@@ -251,5 +266,3 @@ def test_stochastic_latency_is_fixed_without_jitter_and_spread_with_it() -> None
     assert {fixed.get_stochastic_latency() for _ in range(20)} == {100.0}
     jittered = Backtester(friction="retail")._simulator
     assert len({jittered.get_stochastic_latency() for _ in range(20)}) > 1
-
-

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+import math
+from dataclasses import dataclass
+from src.config import RiskSettings
 
 
 @dataclass(frozen=True)
@@ -63,11 +64,19 @@ class MicrosecondCooldownGuard:
 
 
 class GlobalKillSwitch:
-    """Halts the system when total drawdown from peak PnL exceeds a threshold."""
+    """Halts when equity drawdown from its high-water mark exceeds a threshold.
 
-    def __init__(self, max_drawdown_pct: float = 5.0) -> None:
-        if max_drawdown_pct <= 0:
+    ``initial_capital`` and PnL must use the same quote currency. The percentage
+    is measured against peak equity, so a small first loss is not treated as a
+    100% drawdown simply because there is no positive PnL peak yet.
+    """
+
+    def __init__(self, initial_capital: float, max_drawdown_pct: float = 5.0) -> None:
+        if not math.isfinite(initial_capital) or initial_capital <= 0:
+            raise ValueError("initial_capital must be > 0")
+        if not math.isfinite(max_drawdown_pct) or max_drawdown_pct <= 0:
             raise ValueError("max_drawdown_pct must be > 0")
+        self._initial_capital = float(initial_capital)
         self._max_drawdown_pct = max_drawdown_pct
         self._cumulative_pnl: float = 0.0
         self._peak_pnl: float = 0.0
@@ -85,12 +94,14 @@ class GlobalKillSwitch:
     def peak_pnl(self) -> float:
         return self._peak_pnl
 
+    @property
+    def initial_capital(self) -> float:
+        return self._initial_capital
+
     def drawdown_pct(self) -> float:
-        if self._peak_pnl <= 0.0:
-            if self._cumulative_pnl < 0.0:
-                return 100.0
-            return 0.0
-        return max(0.0, (self._peak_pnl - self._cumulative_pnl) / abs(self._peak_pnl) * 100.0)
+        peak_equity = self._initial_capital + self._peak_pnl
+        equity = self._initial_capital + self._cumulative_pnl
+        return max(0.0, (peak_equity - equity) / peak_equity * 100.0)
 
     def is_tripped(self) -> bool:
         return self._tripped
@@ -98,6 +109,8 @@ class GlobalKillSwitch:
     def record_trade(self, pnl: float) -> None:
         if self._tripped:
             return
+        if not math.isfinite(pnl):
+            raise ValueError("pnl must be finite")
         self._cumulative_pnl += pnl
         if self._cumulative_pnl > self._peak_pnl:
             self._peak_pnl = self._cumulative_pnl
@@ -118,11 +131,16 @@ class RiskManager:
         self,
         max_trade_qty: float = 0.01,
         cooldown_us: int = 1_000_000,
-        max_drawdown_pct: float = 5.0,
+        max_drawdown_pct: float | None = None,
+        initial_capital: float | None = None,
     ) -> None:
+        settings = RiskSettings.from_env(
+            initial_capital=initial_capital,
+            max_drawdown_pct=max_drawdown_pct,
+        )
         self.position_guard = MaxPositionGuard(max_trade_qty)
         self.cooldown_guard = MicrosecondCooldownGuard(cooldown_us)
-        self.kill_switch = GlobalKillSwitch(max_drawdown_pct)
+        self.kill_switch = GlobalKillSwitch(settings.initial_capital, settings.max_drawdown_pct)
 
     def check_order(self, qty: float) -> OrderCheckResult:
         if self.kill_switch.is_tripped():

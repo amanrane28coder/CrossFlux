@@ -9,7 +9,7 @@ Output
 ------
   Console : BacktestResult.summary() — key metrics table
   File    : backtest_results.png — 3-panel performance chart:
-              Panel 1 (top)    : Cumulative equity curve (USD)
+              Panel 1 (top)    : Cumulative modeled account units
               Panel 2 (middle) : Per-trade PnL bars (green = profit, red = loss)
               Panel 3 (bottom) : Rolling drawdown (shaded area)
 
@@ -46,12 +46,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from backtest.engine import Backtester, INITIAL_CAPITAL, BacktestResult
+from src.observability import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+configure_logging()
 logger = logging.getLogger("run_backtest")
 
 OUTPUT_PATH = _ROOT / "backtest_results.png"
@@ -81,7 +78,7 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
 
     fig = plt.figure(figsize=(16, 12), facecolor=BG)
     fig.suptitle(
-        "Cross-Venue Arbitrage Predictor — Phase 9 Backtest",
+        "Cross-Venue Arbitrage Predictor — Research Simulation",
         fontsize=18, fontweight="bold", color="white", y=0.98,
     )
 
@@ -106,7 +103,7 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
 
     ax1.plot(ec.index, ec.values, color=ACCENT, linewidth=1.5, zorder=3, label="Equity")
     ax1.axhline(INITIAL_CAPITAL, color="#444466", linestyle="--", linewidth=1,
-                label=f"Starting capital ${INITIAL_CAPITAL:,.0f}")
+                label=f"Starting capital {INITIAL_CAPITAL:,.0f} units")
 
     # Fill above/below starting capital
     ax1.fill_between(
@@ -120,8 +117,8 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
         alpha=0.25, color=RED_CLR, zorder=2,
     )
 
-    ax1.set_ylabel("Portfolio Equity (USD)", color="white", fontsize=11)
-    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax1.set_ylabel("Portfolio Equity (modeled units)", color="white", fontsize=11)
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
     ax1.tick_params(colors="white", labelbottom=False)
     ax1.grid(axis="y", color="#1e1e3a", linewidth=0.6, zorder=1)
     ax1.legend(loc="upper left", fontsize=9, framealpha=0.3)
@@ -130,18 +127,24 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
     final_eq = float(ec.iloc[-1])
     ret_str  = f"{result.total_return_pct:+.2f}%"
     ax1.annotate(
-        f"  Final: ${final_eq:,.2f}  ({ret_str})",
+        f"  Final: {final_eq:,.2f} units  ({ret_str})",
         xy=(ec.index[-1], final_eq),
         fontsize=10, color=ACCENT if final_eq >= INITIAL_CAPITAL else RED_CLR,
         ha="right",
     )
 
     # Metric box top-right
+    currency_note = (
+        "UNCONVERTED QUOTES"
+        if "real" in result.data_source.lower()
+        else "SYNTHETIC DATA — NO EDGE EVIDENCE"
+    )
     metrics_text = (
-        f"Sharpe: {result.sharpe_ratio:.3f}\n"
-        f"MDD:   {result.max_drawdown_pct:.2f}%\n"
+        f"Combined HAC Sharpe: {result.sharpe_ratio:.3f}\n"
+        f"Combined MDD:   {result.max_drawdown_pct:.2f}%\n"
         f"Trades: {len(result.trades):,}\n"
-        f"Win %:  {result.win_rate*100:.1f}%"
+        f"Combined win: {result.win_rate*100:.1f}%\n"
+        f"{currency_note}"
     )
     ax1.text(
         0.99, 0.05, metrics_text,
@@ -191,8 +194,8 @@ def plot_results(result: BacktestResult, output_path: pathlib.Path) -> None:
                          alpha=0.9, label="20-trade rolling mean", zorder=4)
             ax2.legend(loc="upper left", fontsize=8, framealpha=0.3)
 
-    ax2.set_ylabel("Trade PnL (USD)", color="white", fontsize=11)
-    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:+.2f}"))
+    ax2.set_ylabel("Trade PnL (modeled units)", color="white", fontsize=11)
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:+.2f}"))
     ax2.tick_params(colors="white", labelbottom=False)
     ax2.grid(axis="y", color="#1e1e3a", linewidth=0.6, zorder=1)
 
@@ -241,7 +244,20 @@ if __name__ == "__main__":
         "--synthetic", action="store_true",
         help="run generated demo data explicitly instead of requiring real book files",
     )
+    parser.add_argument(
+        "--max-quote-age-ms", type=int, default=250,
+        help="reject signal/fill books older than this many milliseconds (default: 250)",
+    )
     args = parser.parse_args()
+
+    if not args.synthetic:
+        logger.warning(
+            "RESEARCH LIMITATION: configured books are BTC/USDT (Binance) and "
+            "XBT/USD (Kraken), but this runner has no historical USDT/USD "
+            "conversion series. PnL, equity, returns, and Sharpe below are "
+            "unconverted mixed-quote diagnostics; they are not comparable USD "
+            "performance."
+        )
 
     print("\n" + "═" * 50)
     print("  Cross-Venue Arbitrage Predictor — Phase 9")
@@ -263,6 +279,7 @@ if __name__ == "__main__":
         kraken_path      = pathlib.Path("data/raw/kraken_book_snapshot_5_2024-03-01_XBT-USD.csv.gz"),
         generator_kwargs = {"duration_s": 625, "seed": 42},
         use_synthetic   = args.synthetic,
+        max_quote_age_ms = args.max_quote_age_ms,
     )
 
 
@@ -284,4 +301,3 @@ if __name__ == "__main__":
     ec_df = _to_datetime_index(result.equity_curve).to_frame(name="equity")
     ec_df.to_csv(equity_path, index=True, index_label="timestamp")
     print(f"Equity log saved → {equity_path}")
-

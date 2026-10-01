@@ -49,8 +49,8 @@ target_link_libraries(live_trading_binance_kraken PRIVATE
 
 # Set runtime library output directory to find the .so file
 set_target_properties(live_trading_binance_kraken PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../
+    LIBRARY_OUTPUT_DIRECTORY ${CROSSFLUX_OUTPUT_DIRECTORY}
+    RUNTIME_OUTPUT_DIRECTORY ${CROSSFLUX_OUTPUT_DIRECTORY}
 )
 
 # Optimize for speed.

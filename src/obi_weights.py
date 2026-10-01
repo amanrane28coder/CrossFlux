@@ -83,6 +83,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Sequence
+from src.config import OBI_PROFILE_ENV
 
 __all__ = [
     "WeightProfile", "PROFILES", "DEFAULT_PROFILE", "MAX_LEVELS",
@@ -90,7 +91,7 @@ __all__ = [
 ]
 
 DEFAULT_PROFILE = "flat"
-ENV_VAR = "CROSSFLUX_OBI_PROFILE"
+ENV_VAR = OBI_PROFILE_ENV
 
 # Matches OrderBookSnapshot<N> default N=10 in cpp_engine/include/models.hpp.
 # A profile may be shorter; trailing levels then carry zero weight.

@@ -2,6 +2,9 @@
 
 Why this module exists
 ---------------------
+The audit details below describe pre-fix behavior and historical measurements;
+they are not claims about the current execution path.
+
 Three divergent fee models used to coexist in this repository:
 
     backtest/engine.py:69                      flat 0.05% per leg  -> 10.0 bps round-trip
@@ -61,6 +64,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, replace
 from typing import Mapping
+from src.config import FEE_PRESET_ENV
 
 __all__ = [
     "FeeModel", "PRESETS", "DEFAULT_PRESET",
@@ -68,7 +72,7 @@ __all__ = [
 ]
 
 DEFAULT_PRESET = "institutional"
-ENV_VAR = "CROSSFLUX_FEE_PRESET"
+ENV_VAR = FEE_PRESET_ENV
 
 
 @dataclass(frozen=True)

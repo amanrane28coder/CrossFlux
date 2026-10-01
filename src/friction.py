@@ -91,10 +91,11 @@ import math
 import os
 from dataclasses import dataclass, replace
 from typing import Sequence
+from src.config import FRICTION_PRESET_ENV
 
 import numpy as np
 
-ENV_VAR = "CROSSFLUX_FRICTION_PRESET"
+ENV_VAR = FRICTION_PRESET_ENV
 DEFAULT_PRESET = "stress"
 
 # Quantities below this are treated as zero. Book amounts are in BTC and the

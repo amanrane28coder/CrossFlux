@@ -1,0 +1,13 @@
+.git
+.env
+.venv
+venv
+build
+__pycache__
+.pytest_cache
+data/raw
+*.so
+*.dylib
+*.o
+*.o.tmp
+backtest_results.png

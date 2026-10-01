@@ -138,7 +138,7 @@ def _run(reports: list) -> tuple:
     node = object.__new__(LI.LiveArbitrageNode)
     node.aggregator = types.SimpleNamespace(evaluate=lambda ticks: [_Sig()])
     node.risk_mgr = RiskManager(max_trade_qty=0.01, cooldown_us=5_000_000,
-                                max_drawdown_pct=10.0)
+                                max_drawdown_pct=10.0, initial_capital=100.0)
     node.latest_snap_a = node.latest_snap_b = _Snap()
     node.total_orders = node.filled_orders = 0
     node.realized_pnl = node.current_position = 0.0
