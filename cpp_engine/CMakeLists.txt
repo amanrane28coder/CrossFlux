@@ -31,7 +31,6 @@ find_package(pybind11 REQUIRED)
 add_library(arbitrage_engine_lib SHARED
     src/predictor.cpp
     src/models.cpp
-    src/bindings.cpp
     src/ingestion_engine.cpp
     src/execution_manager.cpp
     src/feed_handler.cpp
