@@ -33,3 +33,5 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/build/artifacts:${{ github.workspace }}
         run: .venv/bin/python -m pytest -q
+
+# CI configuration for CrossFlux - updated for reliability
